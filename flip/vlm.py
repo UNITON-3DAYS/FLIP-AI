@@ -9,10 +9,19 @@
 - 같은 크롭을 2회 인식해 결과가 다르거나 UNSURE면 None → 호출부가 보류.
 - 키 없음/네트워크 오류/타임아웃도 전부 None. 절대 크래시하지 않는다.
 - SDK 없이 requests로 provider별 REST를 직접 호출한다.
+
+동시성:
+- 모든 API 왕복은 이 모듈의 전역 공유 풀(_executor)을 거친다. 동시 호출 수를
+  FLIP_VLM_CONCURRENCY 하나로 묶어 rate limit을 넘지 않게 한다. 페이지 병렬
+  (session.py)과 문제 병렬(grade.py)은 이 풀의 슬롯을 두고 경쟁할 뿐이다.
+- 풀에는 leaf HTTP 호출(_call)만 제출한다. read_math/read_mcq 자체를 풀에
+  제출하면 안 된다 — 풀 안에서 다시 풀을 기다려 교착이 날 수 있다.
 """
 import base64
+import concurrent.futures
 import os
 import re
+import threading
 
 import cv2
 import requests
@@ -63,6 +72,30 @@ def _model():
 def available():
     """VLM 사용 가능 여부 (API 키 존재)."""
     return bool(os.environ.get("FLIP_VLM_API_KEY"))
+
+
+# ── 전역 공유 풀: 동시 API 호출 수의 유일한 상한 ──────────────────────────
+DEFAULT_CONCURRENCY = 8  # 동시 API 왕복 상한 (rate limit 여유 있게, 조정 가능)
+_EXECUTOR = None
+_EXECUTOR_LOCK = threading.Lock()
+
+
+def _concurrency():
+    try:
+        return max(1, int(os.environ.get("FLIP_VLM_CONCURRENCY", DEFAULT_CONCURRENCY)))
+    except ValueError:
+        return DEFAULT_CONCURRENCY
+
+
+def _executor():
+    """프로세스 전역 단일 ThreadPoolExecutor (지연 생성). 모든 _call이 이걸 거친다."""
+    global _EXECUTOR
+    if _EXECUTOR is None:
+        with _EXECUTOR_LOCK:
+            if _EXECUTOR is None:
+                _EXECUTOR = concurrent.futures.ThreadPoolExecutor(
+                    max_workers=_concurrency(), thread_name_prefix="vlm")
+    return _EXECUTOR
 
 
 def _encode_jpeg_b64(img):
@@ -185,17 +218,20 @@ def _call(b64, prompt=PROMPT):
 def read_math(crop):
     """크롭 이미지 → 인식된 답 문자열. 불확실/실패는 None (호출부가 보류).
 
-    같은 크롭을 2회 호출해 결과가 일치할 때만 신뢰한다.
+    같은 크롭을 2회 호출해 결과가 일치할 때만 신뢰한다. 두 호출은 서로 독립이라
+    전역 풀에 동시에 던져 왕복 시간을 반으로 줄인다 (실제 동시 호출 수는 풀이 캡).
     """
     if not available():
         return None  # 네트워크 호출 없이 종료
     b64 = _encode_jpeg_b64(crop)
     if b64 is None:
         return None
-    first = _call(b64)
+    pool = _executor()
+    f1 = pool.submit(_call, b64)
+    f2 = pool.submit(_call, b64)
+    first, second = f1.result(), f2.result()
     if first is None or first.upper() in REFUSALS:
         return None
-    second = _call(b64)
     if second is None or second.upper() in REFUSALS:
         return None
     if first.replace(" ", "") != second.replace(" ", ""):
@@ -215,7 +251,7 @@ def read_mcq(block_crop):
     b64 = _encode_jpeg_b64(block_crop)
     if b64 is None:
         return None
-    text = _call(b64, MCQ_PROMPT)
+    text = _executor().submit(_call, b64, MCQ_PROMPT).result()  # 풀 경유로 전역 캡 반영
     if not text or text.upper() in REFUSALS or "NONE" in text.upper():
         return None  # 인식 실패/무마킹 → 호출부가 보류
     nums = sorted({int(n) for n in re.findall(r"[1-9]", text)})
