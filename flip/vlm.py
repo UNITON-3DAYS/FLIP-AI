@@ -25,8 +25,14 @@ PROMPT = (
     "손글씨 수학 답 이미지다. 답을 한 줄 선형 표기로만 출력해라: "
     "분수는 a/b, 제곱근은 sqrt(x), 거듭제곱은 x^2, "
     "해 여러 개는 쉼표 구분 (예: x=-2,3). 다른 말 금지. "
-    "읽을 수 없거나 불확실하면 UNSURE만 출력."
+    "읽을 수 없거나 불확실하면 UNSURE만 출력. "
+    "손글씨가 없고 인쇄된 활자만 보이면 PRINTED만 출력. "
+    "인쇄와 손글씨가 섞여 있으면 손글씨 부분만 읽어라."
 )
+
+# 읽기 거부 응답 (둘 다 None 처리 → 호출부 보류). PRINTED는 마스킹을 빠져나온
+# 인쇄 수식이 답 후보로 잘못 올라온 경우의 마지막 방어선이다.
+REFUSALS = {"UNSURE", "PRINTED"}
 
 DEFAULT_MODELS = {
     "openai": "gpt-4o-mini",
@@ -146,10 +152,10 @@ def read_math(crop):
     if b64 is None:
         return None
     first = _call(b64)
-    if first is None or first.upper() == "UNSURE":
+    if first is None or first.upper() in REFUSALS:
         return None
     second = _call(b64)
-    if second is None or second.upper() == "UNSURE":
+    if second is None or second.upper() in REFUSALS:
         return None
     if first.replace(" ", "") != second.replace(" ", ""):
         return None  # 2회 불일치 → 인식 불확실
