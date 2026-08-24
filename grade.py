@@ -142,6 +142,8 @@ def selftest():
     from flip.structure import _selftest as structure_selftest
     structure_selftest()
     from flip.mcq import _selftest as mcq_selftest; mcq_selftest()
+    from flip.session import _selftest as session_selftest
+    session_selftest()
 
     print("selftest OK")
 
@@ -150,6 +152,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--image", help="페이지 사진 1장")
     ap.add_argument("--batch", help="사진 폴더 (일괄 처리)")
+    ap.add_argument("--simulate", help="사진 폴더를 스캔 세션처럼 간격 투입 (비동기 채점 데모)")
+    ap.add_argument("--interval", type=float, default=2.0, help="--simulate 투입 간격(초)")
     ap.add_argument("--db", help="정답 mock DB JSON")
     ap.add_argument("--page", help="쪽수 수동 지정 (쪽수 인식 대신)")
     ap.add_argument("--debug", action="store_true", help="블록 오버레이 등 디버그 출력")
@@ -166,8 +170,12 @@ def main():
         print(format_page(grade_page(args.image, db, page_hint=args.page, debug=args.debug)))
     elif args.batch:
         run_batch(args.batch, db, debug=args.debug)
+    elif args.simulate:
+        from flip.session import simulate
+        simulate(args.simulate, lambda p: grade_page(p, db, debug=args.debug),
+                 interval=args.interval)
     else:
-        ap.error("--image 또는 --batch 필요")
+        ap.error("--image, --batch 또는 --simulate 필요")
 
 
 if __name__ == "__main__":
