@@ -13,6 +13,7 @@ import sys
 from pathlib import Path
 
 from flip import ocr, structure
+from flip import equivalence, handwriting, vlm
 from flip.db import AnswerDB, MULTIPLE_CHOICE, SUBJECTIVE
 from flip.preprocess import preprocess
 from flip.results import HOLD, O, PageResult, QuestionResult, X, format_page
@@ -29,8 +30,22 @@ def grade_mcq(color, gray, boxes, block, question):
 
 
 def grade_subjective(color, gray, boxes, block, question):
-    """주관식 stub. VLM 인식 티켓이 교체."""
-    return QuestionResult(question.question_no, HOLD, detail="주관식 미구현")
+    """주관식: 손글씨 크롭 추출 → VLM 인식 → SymPy 동치 비교."""
+    crops = handwriting.extract_crops(gray, boxes, block)
+    if not crops:
+        return QuestionResult(question.question_no, HOLD,
+                              detail="손글씨 답 없음(또는 인쇄 위 겹쳐씀)")
+    if not vlm.available():
+        return QuestionResult(question.question_no, HOLD, detail="VLM API 키 없음")
+    student = vlm.read_math(crops[0])  # 후보 중 가장 큰 크롭
+    if student is None:
+        return QuestionResult(question.question_no, HOLD, detail="인식 불확실")
+    verdict = equivalence.equivalent(student, question.answer)
+    if verdict is None:
+        return QuestionResult(question.question_no, HOLD,
+                              student_answer=student, detail="파싱 실패")
+    return QuestionResult(question.question_no, O if verdict else X,
+                          student_answer=student)
 
 
 # ── 파이프라인 조립 ──────────────────────────────────────────────────────
@@ -116,6 +131,13 @@ def selftest():
         QuestionResult("1", O), QuestionResult("2", X), QuestionResult("7-1", HOLD)])
     assert pr2.counts() == {O: 1, X: 1, HOLD: 1}
     assert "1번" in format_page(pr2).replace(" ", "")
+
+    from flip.equivalence import _selftest as equivalence_selftest
+    equivalence_selftest()
+    from flip.handwriting import _selftest as handwriting_selftest
+    handwriting_selftest()
+    from flip.vlm import _selftest as vlm_selftest
+    vlm_selftest()
 
     from flip.structure import _selftest as structure_selftest
     structure_selftest()
