@@ -124,13 +124,30 @@ def find_anchors(boxes, columns, expected_nos):
         best_prev = []
         for j in range(len(best)):
             chain = best[j]
-            if expected_index[chain[-1][0]] < expected_index[item[0]] and len(chain) > len(best_prev):
+            if expected_index[chain[-1][1][0]] < expected_index[item[0]] and len(chain) > len(best_prev):
                 best_prev = chain
-        best.append(best_prev + [item])
-    if not best:
-        return []
-    chain = max(best, key=len)
-    return chain
+        best.append(best_prev + [(i, item)])
+    chain = max(best, key=len) if best else []
+
+    # 4) 오독 보정: 기대 번호 하나가 빠진 자리(체인 이웃 사이 읽기 순서 창)에
+    #    anchor 패턴이지만 기대에 없는 후보('0060'->'0900' 오독 등)가 정확히
+    #    하나면 그 번호로 인정. 애매하면(0개/2개 이상) 보정하지 않는다.
+    chain_by_no = {item[0]: (i, item[1]) for i, item in chain}
+    used_idx = {i for i, _ in chain}
+    result = []
+    for k, no in enumerate(expected_nos):
+        if no in chain_by_no:
+            result.append((no, chain_by_no[no][1]))
+            continue
+        lo = max((chain_by_no[p][0] for p in expected_nos[:k] if p in chain_by_no), default=-1)
+        hi = min((chain_by_no[p][0] for p in expected_nos[k + 1:] if p in chain_by_no),
+                 default=len(ordered))
+        window = [ordered[j] for j in range(lo + 1, hi)
+                  if j not in used_idx and ordered[j][0] not in expected_index
+                  and len(ordered[j][0]) == len(no)]  # 오독은 자릿수를 보존한다
+        if len(window) == 1:
+            result.append((no, window[0][1]))
+    return result
 
 
 def cut_blocks(anchors, columns, img_h):
@@ -226,6 +243,12 @@ def _selftest():
     boxes_noise = boxes + [box("9.", 60, 900)]
     _, blocks3, hold3 = analyze(boxes_noise, img_h, img_w, db)
     assert hold3 == "" and set(blocks3) == {"1", "2", "3", "4"}
+
+    # 오독 보정: '2.'가 '8.'로 읽혀도 그 자리 유일 후보면 '2'로 복원
+    boxes_misread = [box("8.", 60, 600) if b.text == "2." else b for b in boxes]
+    _, blocks4, hold4 = analyze(boxes_misread, img_h, img_w, db)
+    assert hold4 == "" and set(blocks4) == {"1", "2", "3", "4"}, (hold4, blocks4)
+    assert blocks4["2"][1] == 600
 
     # 소문항 패턴
     assert _anchor_text("7-1.") == "7-1" and _anchor_text("7-1") == "7-1"

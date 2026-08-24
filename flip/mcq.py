@@ -75,7 +75,61 @@ def _find_markers(boxes, block, num_choices):
             continue
         for n, i, j in _marker_spans(b.text, num_choices):
             markers.setdefault(n, _span_rect(b, i, j))  # 첫 검출 우선
+    _extrapolate_markers(markers, num_choices, block)
     return markers
+
+
+def _extrapolate_markers(markers, num_choices, block):
+    """미검출 마커 위치를 격자 외삽으로 복원 (in-place).
+
+    학생이 마커 위에 동그라미를 치면 OCR이 그 마커를 못 읽는다. 검출된
+    마커들로 행(cy 클러스터)·열 간격(dx)을 추정해 빠진 번호 위치를 채운다.
+    행 전체가 사라진 경우 등 추정이 블록을 벗어나면 채우지 않는다.
+    """
+    missing = [n for n in range(1, num_choices + 1) if n not in markers]
+    if not missing or len(markers) < 2:
+        return
+    h = float(np.median([m[3] - m[1] for m in markers.values()]))
+    w = float(np.median([m[2] - m[0] for m in markers.values()]))
+
+    rows = []  # [[번호, ...] 위 행부터], 같은 행 = y1 차이 < 0.8h
+    for n in sorted(markers, key=lambda k: markers[k][1]):
+        if rows and abs(markers[rows[-1][0]][1] - markers[n][1]) < h * 0.8:
+            rows[-1].append(n)
+        else:
+            rows.append([n])
+    for r in rows:
+        r.sort()
+
+    dxs = [(markers[b][0] - markers[a][0]) / (b - a)
+           for row in rows for a, b in zip(row, row[1:])]
+    dx = float(np.median(dxs)) if dxs else None
+    x0 = min(m[0] for m in markers.values())
+
+    if dx is None:
+        # 세로 1열 배치: 이웃 중점 보간만
+        for n in missing:
+            if (n - 1) in markers and (n + 1) in markers:
+                a, b = markers[n - 1], markers[n + 1]
+                markers[n] = tuple((p + q) / 2 for p, q in zip(a, b))
+        return
+
+    row_start, row_y = {}, {}
+    for ri, row in enumerate(rows):
+        f = markers[row[0]]
+        row_start[ri] = row[0] - round((f[0] - x0) / dx)
+        row_y[ri] = (f[1], f[3])
+    for n in missing:
+        cand = [ri for ri, s in row_start.items() if s <= n]
+        if not cand:
+            continue
+        ri = max(cand, key=lambda r: row_start[r])
+        slot = n - row_start[ri]
+        x1 = x0 + slot * dx
+        if slot < 0 or x1 + w > block[2]:  # 행 전체 소실 등 추정 불가
+            continue
+        y1, y2 = row_y[ri]
+        markers[n] = (x1, y1, x1 + w, y2)
 
 
 # ── ROI 특징 ─────────────────────────────────────────────────────────────
@@ -329,6 +383,12 @@ def _selftest():
     g, boxes = base_page()
     r = run(g, boxes[:4], 3)
     assert r.verdict == HOLD and "마커 미검출" in r.detail, r
+
+    # 4b) 마킹에 가려 마커 하나 미검출 -> 이웃 보간으로 복원해 채점
+    g, boxes = base_page()
+    cv2.circle(g, centers[2], 26, 0, 3)
+    r = run(g, [b for b in boxes if b.text != chr(0x2460 + 2)], 3)
+    assert r.verdict == O and r.student_answer == "3", r
 
     # 5) 무마킹 + ROI 밖 잉크 덩어리 -> 숫자 작성 추정 보류
     g, boxes = base_page()
