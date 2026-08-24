@@ -9,6 +9,7 @@
 아직 stub인 단계는 보류를 반환한다. 후속 티켓이 하나씩 실제 구현으로 교체한다.
 """
 import argparse
+import concurrent.futures
 import sys
 from pathlib import Path
 
@@ -85,15 +86,28 @@ def grade_page(image_path, db, page_hint=None, debug=False):
                           results=[QuestionResult(q.question_no, HOLD) for q in questions],
                           hold_reason=hold)
 
-    results = []
-    for q in questions:
-        block = blocks.get(q.question_no)
-        if block is None:
-            results.append(QuestionResult(q.question_no, HOLD, detail="블록 없음"))
-        elif q.qtype == MULTIPLE_CHOICE:
-            results.append(grade_mcq(color, gray, boxes, block, q))
-        else:
-            results.append(grade_subjective(color, gray, boxes, block, q))
+    def grade_one(q):
+        """문제 1개 채점. 예외는 보류로 흡수해 한 문제 실패가 페이지를 죽이지 않게."""
+        try:
+            block = blocks.get(q.question_no)
+            if block is None:
+                return QuestionResult(q.question_no, HOLD, detail="블록 없음")
+            if q.qtype == MULTIPLE_CHOICE:
+                return grade_mcq(color, gray, boxes, block, q)
+            return grade_subjective(color, gray, boxes, block, q)
+        except Exception as e:
+            return QuestionResult(q.question_no, HOLD, detail=f"처리 오류: {e}")
+
+    # 문제들은 서로 독립이고 전부 VLM 네트워크 대기라 동시에 채점한다. 실제 동시
+    # API 호출 수는 vlm 모듈의 전역 공유 풀이 캡하므로, 여기선 문제 수만큼 스레드를
+    # 열어도 안전하다(이 스레드들은 vlm 풀 슬롯을 기다리기만 하는 오케스트레이터).
+    # ex.map은 입력 순서를 보존하므로 결과 순서는 순차 버전과 동일하다.
+    if len(questions) <= 1:
+        results = [grade_one(q) for q in questions]
+    else:
+        with concurrent.futures.ThreadPoolExecutor(
+                max_workers=len(questions), thread_name_prefix="q") as ex:
+            results = list(ex.map(grade_one, questions))
     return PageResult(image=str(image_path), page_no=page_no, results=results)
 
 
