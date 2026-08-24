@@ -19,7 +19,6 @@ MIN_SIDE = 12         # 병합 후에도 이보다 작은 후보는 버림
 CROP_PAD = 10         # 크롭 패딩 (px)
 STROKE_STD_MIN = 0.15  # 획 굵기(distance transform) 표준편차 하한. 인쇄 잔재는
                        # 굵기가 균일해 분산이 낮다 — 보조 필터라 느슨하게 건다.
-MAX_CANDIDATES = 3    # 반환 후보 수 상한 (면적 큰 순)
 
 
 def _mask_printed(gray, boxes, block):
@@ -110,12 +109,18 @@ def _candidates(gray, boxes, block):
         if _stroke_std(binary, r) < STROKE_STD_MIN:
             continue  # 굵기 분산이 지나치게 낮으면 인쇄 잔재로 본다
         keep.append(r)
-    keep.sort(key=lambda r: (r[2] - r[0]) * (r[3] - r[1]), reverse=True)
-    return region, keep[:MAX_CANDIDATES]
+    if not keep:
+        return region, []
+    # 블록당 답은 하나라는 전제로, 살아남은 성분 전체를 합집합 하나로 묶는다.
+    # 세로 분수(분자/분수선/분모)처럼 MERGE_GAP보다 벌어져 조각난 답도
+    # 통째로 VLM에 전달된다 — 조각 하나만 읽고 오판하는 사고 방지.
+    union = (min(r[0] for r in keep), min(r[1] for r in keep),
+             max(r[2] for r in keep), max(r[3] for r in keep))
+    return region, [union]
 
 
 def extract_crops(gray, boxes, block):
-    """block에서 손글씨 답 후보 크롭 목록 (면적 큰 순, 보통 0~2개)."""
+    """block에서 손글씨 답 크롭. 합집합 1개([crop]) 또는 빈 리스트."""
     region, rects = _candidates(gray, boxes, block)
     crops = []
     for x1, y1, x2, y2 in rects:
@@ -152,3 +157,13 @@ def _selftest():
     blank = np.full((400, 600), 255, np.uint8)
     cv2.putText(blank, "1. abc", (40, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.8, 0, 2)
     assert extract_crops(blank, [OcrBox("1. abc", 0.9, 30, 35, 170, 75)], block) == []
+
+    # 세로 분수: 분자/분수선/분모가 MERGE_GAP보다 벌어져도 크롭 하나로 합쳐진다
+    frac = np.full((400, 600), 255, np.uint8)
+    cv2.putText(frac, "1", (300, 120), cv2.FONT_HERSHEY_SIMPLEX, 1.2, 0, 3)  # 분자
+    cv2.line(frac, (280, 200), (350, 200), 0, 3)                             # 분수선
+    cv2.putText(frac, "2", (300, 300), cv2.FONT_HERSHEY_SIMPLEX, 1.2, 0, 3)  # 분모
+    _, frac_rects = _candidates(frac, [], block)
+    assert len(frac_rects) == 1, f"세로 분수는 후보 1개로 합쳐져야: {frac_rects}"
+    fx1, fy1, fx2, fy2 = frac_rects[0]
+    assert fy1 < 130 and fy2 > 270, "분자~분모 전체를 덮어야 한다"
