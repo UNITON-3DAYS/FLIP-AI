@@ -36,6 +36,8 @@ TEMPLATE_MIN = 5       # median 템플릿을 만들 최소 마커 출현 횟수 
 TEMPLATE_SIZE = 24     # 템플릿 정규화 크기 (px)
 RESIDUAL_DIFF = 40     # 템플릿 차영상에서 잉크로 보는 밝기 차
 BLOB_AREA_SCALE = 0.5  # 숫자 작성 추정 덩어리 최소 면적 = 마커 높이^2 x 이 값
+EXTRAP_MIN = 2         # 외삽에 필요한 최소 검출 마커 수
+EXTRAP_RESID = 1.0     # 외삽 허용 fit 잔차 상한 = 마커 높이 x 이 값
 
 
 # ── 마커 검출 ────────────────────────────────────────────────────────────
@@ -75,61 +77,60 @@ def _find_markers(boxes, block, num_choices):
             continue
         for n, i, j in _marker_spans(b.text, num_choices):
             markers.setdefault(n, _span_rect(b, i, j))  # 첫 검출 우선
-    _extrapolate_markers(markers, num_choices, block)
     return markers
 
 
-def _extrapolate_markers(markers, num_choices, block):
-    """미검출 마커 위치를 격자 외삽으로 복원 (in-place).
+def _axis_fit(ticks, vals, needed):
+    """한 축의 등간격 fit: 값 = a + b*tick. 반환 (예측 함수, 최대 잔차) 또는 None.
 
-    학생이 마커 위에 동그라미를 치면 OCR이 그 마커를 못 읽는다. 검출된
-    마커들로 행(cy 클러스터)·열 간격(dx)을 추정해 빠진 번호 위치를 채운다.
-    행 전체가 사라진 경우 등 추정이 블록을 벗어나면 채우지 않는다.
+    tick 값이 하나뿐이면 기울기를 알 수 없으므로, 예측할 tick이 전부 그 값일
+    때만 상수 예측을 허용한다.
     """
-    missing = [n for n in range(1, num_choices + 1) if n not in markers]
-    if not missing or len(markers) < 2:
-        return
-    h = float(np.median([m[3] - m[1] for m in markers.values()]))
-    w = float(np.median([m[2] - m[0] for m in markers.values()]))
+    if len(set(ticks)) >= 2:
+        f = np.polyfit(ticks, vals, 1)
+        return (lambda t: float(np.polyval(f, t)),
+                max(abs(np.polyval(f, ticks) - vals)))
+    if set(needed) <= set(ticks):
+        m = float(np.median(vals))
+        return (lambda t: m, max(abs(np.array(vals, dtype=float) - m)))
+    return None
 
-    rows = []  # [[번호, ...] 위 행부터], 같은 행 = y1 차이 < 0.8h
-    for n in sorted(markers, key=lambda k: markers[k][1]):
-        if rows and abs(markers[rows[-1][0]][1] - markers[n][1]) < h * 0.8:
-            rows[-1].append(n)
-        else:
-            rows.append([n])
-    for r in rows:
-        r.sort()
 
-    dxs = [(markers[b][0] - markers[a][0]) / (b - a)
-           for row in rows for a, b in zip(row, row[1:])]
-    dx = float(np.median(dxs)) if dxs else None
-    x0 = min(m[0] for m in markers.values())
+def _extrapolate_markers(markers, num_choices):
+    """검출 마커들의 등간격 그리드 fit으로 미검출 마커 위치 외삽.
 
-    if dx is None:
-        # 세로 1열 배치: 이웃 중점 보간만
-        for n in missing:
-            if (n - 1) in markers and (n + 1) in markers:
-                a, b = markers[n - 1], markers[n + 1]
-                markers[n] = tuple((p + q) / 2 for p, q in zip(a, b))
-        return
+    학생이 마커 위에 마킹하면 OCR이 그 마커를 못 읽는다. 인쇄 마커는 행당
+    cols개 행우선 그리드(한 줄 포함)에 등간격으로 놓이므로, cols 후보별로
+    열->cx, 행->cy 1차 fit을 하고 잔차(마커 높이 기준)가 허용되는 최소 잔차
+    후보로 나머지 위치를 채운다. 전부 실패하면 원본 그대로(기존 보류 경로).
+    """
+    ns = sorted(markers)
+    cx = [(markers[n][0] + markers[n][2]) / 2 for n in ns]
+    cy = [(markers[n][1] + markers[n][3]) / 2 for n in ns]
+    w = float(np.median([markers[n][2] - markers[n][0] for n in ns]))
+    h = float(np.median([markers[n][3] - markers[n][1] for n in ns]))
+    missing = sorted(set(range(1, num_choices + 1)) - set(ns))
 
-    row_start, row_y = {}, {}
-    for ri, row in enumerate(rows):
-        f = markers[row[0]]
-        row_start[ri] = row[0] - round((f[0] - x0) / dx)
-        row_y[ri] = (f[1], f[3])
-    for n in missing:
-        cand = [ri for ri, s in row_start.items() if s <= n]
-        if not cand:
+    best = None  # (잔차, {번호: (cx, cy)})
+    for cols in range(1, num_choices + 1):
+        col = [(n - 1) % cols for n in ns]
+        row = [(n - 1) // cols for n in ns]
+        fx = _axis_fit(col, cx, [(n - 1) % cols for n in missing])
+        fy = _axis_fit(row, cy, [(n - 1) // cols for n in missing])
+        if fx is None or fy is None:
             continue
-        ri = max(cand, key=lambda r: row_start[r])
-        slot = n - row_start[ri]
-        x1 = x0 + slot * dx
-        if slot < 0 or x1 + w > block[2]:  # 행 전체 소실 등 추정 불가
+        resid = max(fx[1], fy[1])
+        if resid > h * EXTRAP_RESID:
             continue
-        y1, y2 = row_y[ri]
-        markers[n] = (x1, y1, x1 + w, y2)
+        if best is None or resid < best[0]:
+            best = (resid, {n: (fx[0]((n - 1) % cols), fy[0]((n - 1) // cols))
+                            for n in missing})
+    if best is None:
+        return markers
+    out = dict(markers)
+    for n, (x, y) in best[1].items():
+        out[n] = (x - w / 2, y - h / 2, x + w / 2, y + h / 2)
+    return out
 
 
 # ── ROI 특징 ─────────────────────────────────────────────────────────────
@@ -265,6 +266,8 @@ def grade(color, gray, boxes, block, question):
     img_h, img_w = gray.shape[:2]
 
     markers = _find_markers(boxes, block, question.num_choices)
+    if EXTRAP_MIN <= len(markers) < question.num_choices:
+        markers = _extrapolate_markers(markers, question.num_choices)
     if len(markers) < question.num_choices:
         missing = sorted(set(range(1, question.num_choices + 1)) - set(markers))
         return QuestionResult(question.question_no, HOLD,
@@ -379,16 +382,37 @@ def _selftest():
     r = run(g2, boxes2, [2, 4])
     assert r.verdict == X and r.student_answer == "2", r
 
-    # 4) 마커 일부 미검출 -> 보류
+    # 4) 마커 일부 미검출 -> 등간격 외삽으로 채워 정상 판정 (무마킹 -> 보류)
     g, boxes = base_page()
     r = run(g, boxes[:4], 3)
-    assert r.verdict == HOLD and "마커 미검출" in r.detail, r
+    assert r.verdict == HOLD and "마킹 없음" in r.detail, r
 
-    # 4b) 마킹에 가려 마커 하나 미검출 -> 이웃 보간으로 복원해 채점
+    # 4b) 마킹으로 가려져 OCR이 3번 마커를 놓침 -> 외삽으로 복원해 3번 검출
     g, boxes = base_page()
     cv2.circle(g, centers[2], 26, 0, 3)
-    r = run(g, [b for b in boxes if b.text != chr(0x2460 + 2)], 3)
+    r = run(g, boxes[:2] + boxes[3:], 3)
     assert r.verdict == O and r.student_answer == "3", r
+
+    # 4c) 검출 1개뿐 -> 외삽 불가, 기존 보류
+    g, boxes = base_page()
+    r = run(g, boxes[:1], 3)
+    assert r.verdict == HOLD and "마커 미검출" in r.detail, r
+
+    # 4d) 3개/행 그리드 배열(①②③ / ④⑤)에서 5번 마커가 마킹으로 가려짐
+    g = np.full((H, W), 255, np.uint8)
+    grid = [(60 + (i % 3) * 120, 90 + (i // 3) * 130) for i in range(5)]
+    boxes_g = []
+    for i, (cx, cy) in enumerate(grid):
+        cv2.circle(g, (cx, cy), 14, 0, 2)
+        cv2.putText(g, str(i + 1), (cx - 6, cy + 6),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, 0, 1)
+        boxes_g.append(OcrBox(chr(0x2460 + i), 0.9,
+                              cx - 16, cy - 16, cx + 16, cy + 16))
+    cv2.circle(g, grid[4], 26, 0, 3)
+    r = run(g, boxes_g[:4], 3)
+    assert r.verdict == X and r.student_answer == "5", r
+    r = run(g, boxes_g[:4], 5)
+    assert r.verdict == O and r.student_answer == "5", r
 
     # 5) 무마킹 + ROI 밖 잉크 덩어리 -> 숫자 작성 추정 보류
     g, boxes = base_page()
