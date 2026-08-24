@@ -16,8 +16,9 @@ import os
 import cv2
 import requests
 
-TIMEOUT = 10      # 초
-MAX_TOKENS = 100  # 답은 한 줄이라 짧게
+TIMEOUT = 20      # 초 (reasoning 모델은 사고 시간이 있어 여유 있게)
+MAX_TOKENS = 100  # 답은 한 줄이라 짧게 (reasoning 모델은 아래에서 여유를 더 준다)
+REASONING_MAX_TOKENS = 2000  # reasoning 모델은 사고 토큰이 한도를 먼저 소진하므로 크게
 
 # LaTeX가 아니라 선형 표기를 강제하는 이유: sympy parse_latex는 antlr 의존성이
 # 필요해서 피한다. flip/equivalence.py가 이 표기를 그대로 파싱한다.
@@ -65,19 +66,30 @@ def _encode_jpeg_b64(img):
 # ── provider별 REST 호출 ─────────────────────────────────────────────────
 
 def _call_openai(b64, key, model):
+    messages = [{"role": "user", "content": [
+        {"type": "text", "text": PROMPT},
+        {"type": "image_url",
+         "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
+    ]}]
+    # GPT-5 세대는 max_tokens를 거부하고 max_completion_tokens를 요구한다.
+    # 크롭 읽기는 단순 작업이라 reasoning effort는 낮출수록 빠르다
+    # (FLIP_VLM_REASONING 미설정 시 파라미터 자체를 안 보낸다 — 구모델 호환).
+    payload = {"model": model, "max_completion_tokens": REASONING_MAX_TOKENS,
+               "messages": messages}
+    effort = os.environ.get("FLIP_VLM_REASONING")
+    if effort:
+        payload["reasoning_effort"] = effort
     r = requests.post(
         "https://api.openai.com/v1/chat/completions",
         headers={"Authorization": f"Bearer {key}"},
-        json={
-            "model": model,
-            "max_tokens": MAX_TOKENS,
-            "messages": [{"role": "user", "content": [
-                {"type": "text", "text": PROMPT},
-                {"type": "image_url",
-                 "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
-            ]}],
-        },
-        timeout=TIMEOUT)
+        json=payload, timeout=TIMEOUT)
+    if r.status_code == 400:
+        # 구세대 모델(gpt-4o 등)이 max_completion_tokens를 모르면 구파라미터로 재시도
+        legacy = {"model": model, "max_tokens": MAX_TOKENS, "messages": messages}
+        r = requests.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={"Authorization": f"Bearer {key}"},
+            json=legacy, timeout=TIMEOUT)
     r.raise_for_status()
     return r.json()["choices"][0]["message"]["content"]
 
