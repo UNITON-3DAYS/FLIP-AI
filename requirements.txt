@@ -1,0 +1,13 @@
+# 기본 (selftest와 채점 로직에 필수)
+numpy
+opencv-python-headless
+pillow
+sympy
+requests
+
+# OCR (인쇄 구조 분석). 설치가 무겁다 — CPU 버전이면 충분.
+paddlepaddle
+paddleocr
+
+# 문제집 PDF -> 페이지 이미지 렌더링 (샘플 준비용)
+pypdfium2

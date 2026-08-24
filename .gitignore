@@ -19,3 +19,10 @@ synth_*.png
 
 # macOS
 .DS_Store
+
+# 비밀정보 (API 키, PDF 경로)
+.env
+
+# 문제집 자료 (저작권) — 렌더링/촬영 이미지, PDF
+samples/
+*.pdf
