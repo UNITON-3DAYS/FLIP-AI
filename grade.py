@@ -12,7 +12,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from flip import ocr
+from flip import ocr, structure
 from flip.db import AnswerDB, MULTIPLE_CHOICE, SUBJECTIVE
 from flip.preprocess import preprocess
 from flip.results import HOLD, O, PageResult, QuestionResult, X, format_page
@@ -21,20 +21,6 @@ IMAGE_EXTS = {".jpg", ".jpeg", ".png"}
 
 
 # ── stub 단계 (후속 티켓이 교체) ─────────────────────────────────────────
-
-def analyze_structure(color, gray, boxes, db, page_hint=None):
-    """파이프라인 2~7번 stub: 쪽수/단/anchor/블록. AKR 구조 티켓이 교체.
-
-    반환: (page_no, blocks, hold_reason)
-    blocks: {question_no: (x1, y1, x2, y2)}
-    """
-    page_no = page_hint or ""
-    if not page_no:
-        return "", {}, "쪽수 인식 미구현 (--page 로 지정 가능)"
-    if db.questions_for(page_no) is None:
-        return page_no, {}, f"DB에 없는 쪽수: {page_no}"
-    return page_no, {}, "블록 분할 미구현"
-
 
 def grade_mcq(color, gray, boxes, block, question):
     """객관식 stub. 마킹 검출 티켓이 교체."""
@@ -56,8 +42,13 @@ def grade_page(image_path, db, page_hint=None, debug=False):
     if ocr.available():
         boxes = ocr.run_ocr(gray)
 
-    page_no, blocks, hold = analyze_structure(color, gray, boxes, db, page_hint)
+    h, w = gray.shape[:2]
+    page_no, blocks, hold = structure.analyze(boxes, h, w, db, page_hint)
     questions = db.questions_for(page_no) or []
+
+    if debug and blocks:
+        out = Path(str(image_path)).with_suffix("") .name
+        structure.draw_debug(color, blocks, f"pred_blocks_{out}.png")
 
     if hold:
         return PageResult(image=str(image_path), page_no=page_no,
@@ -124,6 +115,9 @@ def selftest():
         QuestionResult("1", O), QuestionResult("2", X), QuestionResult("7-1", HOLD)])
     assert pr2.counts() == {O: 1, X: 1, HOLD: 1}
     assert "1번" in format_page(pr2).replace(" ", "")
+
+    from flip.structure import _selftest as structure_selftest
+    structure_selftest()
 
     print("selftest OK")
 
