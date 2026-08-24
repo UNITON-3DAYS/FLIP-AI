@@ -52,7 +52,17 @@
 - `read_math(block_crop)` → 답 문자열 또는 `None`. 같은 크롭 2회 호출이 불일치하거나 `UNSURE`/`PRINTED`면 None.
 - 답 표기는 LaTeX가 아니라 **선형 표기**(분수 `a/b`, 제곱근 `sqrt(x)`, 거듭제곱 `x^2`) — `flip/equivalence.py`가 그대로 파싱한다(antlr 의존 회피).
 
-환경변수: `FLIP_VLM_PROVIDER`(openai|gemini|anthropic), `FLIP_VLM_API_KEY`, `FLIP_VLM_MODEL`, `FLIP_VLM_REASONING`(reasoning 모델일 때 low 권장).
+### 동시성 (병렬 호출)
+
+VLM 호출은 전부 네트워크 I/O 대기라 서로 독립인 호출을 동시에 던진다. 세 겹으로 병렬이다:
+
+- **페이지 간** — `flip/session.py` `ScanSession`(4워커)이 페이지를 동시 채점.
+- **문제 간** — `grade.py` `grade_page`가 한 페이지의 문제들을 ThreadPool로 팬아웃(순서 보존).
+- **검증 2회** — `read_math`가 일관성 2회 호출을 동시에 던진다.
+
+실제 동시 API 호출 수는 **`flip/vlm.py`의 전역 공유 ThreadPoolExecutor 하나**가 유일하게 캡한다. 위 세 겹이 중첩(`페이지 × 문제 × 2`)돼도 leaf HTTP 호출은 전부 이 풀을 거치므로 동시성은 한 곳에서 제한된다 → provider rate limit 안전. 상한은 `FLIP_VLM_CONCURRENCY`(기본 8)로 조절: 429가 잦으면 낮추고, 여유 있으면 올린다. (풀에는 leaf 호출만 넣는다 — `read_math`/`read_mcq` 자체를 풀에 제출하면 중첩 풀 교착이 난다.)
+
+환경변수: `FLIP_VLM_PROVIDER`(openai|gemini|anthropic), `FLIP_VLM_API_KEY`, `FLIP_VLM_MODEL`, `FLIP_VLM_REASONING`(reasoning 모델일 때 low 권장), `FLIP_VLM_CONCURRENCY`(동시 API 호출 상한, 기본 8).
 
 ---
 
