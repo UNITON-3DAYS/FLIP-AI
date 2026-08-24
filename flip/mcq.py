@@ -237,17 +237,26 @@ def grade(color, gray, boxes, block, question):
     top, second = order[0], order[1]
     high = [i for i in order if z[i] >= Z_MARK]
 
+    # 복수정답("모두 고르면")은 answer가 리스트. 마킹 집합과 정답 집합을 비교한다.
+    answers = question.answer if isinstance(question.answer, list) else [question.answer]
+
     if len(high) >= 2:
-        marked = ",".join(str(i + 1) for i in sorted(high))
+        marked = sorted(i + 1 for i in high)
+        marked_s = ",".join(str(m) for m in marked)
+        if len(answers) >= 2:
+            verdict = O if marked == sorted(answers) else X
+            return QuestionResult(question.question_no, verdict,
+                                  student_answer=marked_s,
+                                  detail="복수 마킹 검출")
         return QuestionResult(question.question_no, HOLD,
-                              detail=f"다중 마킹 추정: {marked}번")
+                              detail=f"다중 마킹 추정: {marked_s}번")
     if len(high) == 1:
         if z[top] - z[second] < Z_GAP:
             return QuestionResult(question.question_no, HOLD,
                                   detail=f"판정 애매: {top + 1}번 우세하나 격차 부족 "
                                          f"(z {z[top]:.1f} vs {z[second]:.1f})")
         choice = top + 1
-        verdict = O if choice == question.answer else X
+        verdict = O if [choice] == sorted(answers) else X
         return QuestionResult(question.question_no, verdict,
                               student_answer=str(choice),
                               detail=f"마킹 검출 (z={z[top]:.1f})")
@@ -305,6 +314,16 @@ def _selftest():
     cv2.circle(g, centers[3], 26, 0, 3)
     r = run(g, boxes, 3)
     assert r.verdict == HOLD and "다중 마킹" in r.detail, r
+
+    # 3b) 복수정답: 2·4번 마킹, 정답 [2,4] -> O / [2,3] -> X / 단일 마킹 -> X
+    r = run(g, boxes, [2, 4])
+    assert r.verdict == O and r.student_answer == "2,4", r
+    r = run(g, boxes, [2, 3])
+    assert r.verdict == X and r.student_answer == "2,4", r
+    g2, boxes2 = base_page()
+    cv2.circle(g2, centers[1], 26, 0, 3)
+    r = run(g2, boxes2, [2, 4])
+    assert r.verdict == X and r.student_answer == "2", r
 
     # 4) 마커 일부 미검출 -> 보류
     g, boxes = base_page()

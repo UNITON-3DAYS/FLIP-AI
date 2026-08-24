@@ -14,7 +14,7 @@
 
 - 쪽수(pages 키)는 문자열. 페이지 사진에서 읽은 쪽수로 그 페이지의 문제 목록을 조회한다.
 - subjective answer: 문자열 하나 또는 해가 여러 개면 리스트.
-- multiple_choice answer: 1~num_choices 정수.
+- multiple_choice answer: 1~num_choices 정수. 복수정답("모두 고르면")이면 정수 리스트.
 """
 import json
 from dataclasses import dataclass, field
