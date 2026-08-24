@@ -23,8 +23,9 @@ IMAGE_EXTS = {".jpg", ".jpeg", ".png"}
 # ── stub 단계 (후속 티켓이 교체) ─────────────────────────────────────────
 
 def grade_mcq(color, gray, boxes, block, question):
-    """객관식 stub. 마킹 검출 티켓이 교체."""
-    return QuestionResult(question.question_no, HOLD, detail="객관식 미구현")
+    """객관식: 인쇄 선택지 마커 주변 마킹 검출 (flip/mcq.py)."""
+    from flip import mcq  # 지역 import: stub 교체 시 상단 import 충돌 최소화
+    return mcq.grade(color, gray, boxes, block, question)
 
 
 def grade_subjective(color, gray, boxes, block, question):
@@ -118,6 +119,7 @@ def selftest():
 
     from flip.structure import _selftest as structure_selftest
     structure_selftest()
+    from flip.mcq import _selftest as mcq_selftest; mcq_selftest()
 
     print("selftest OK")
 
