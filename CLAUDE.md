@@ -1,13 +1,20 @@
 # FLIP-AI
 
 문제집 페이지 사진을 자동 채점하는 CV/ML 프로젝트. 파이프라인:
-보정(preprocess) → 인쇄체 OCR(PaddleOCR) → 페이지 구조 파악(structure) →
-객관식 마킹 검출(mcq) | 손글씨 답 크롭(handwriting) → VLM 판독(vlm) →
-SymPy 동치 비교(equivalence) → O/X/보류.
+보정(preprocess) → 인쇄체 OCR(PaddleOCR) → 페이지 구조·문제 블록 절단(structure) →
+문제 블록 통크롭을 VLM에 판독(vlm) → SymPy 동치 비교(equivalence) → O/X/보류.
 
-- 손글씨 답 판독은 VLM API 호출(`flip/vlm.py`, 기본 OpenAI gpt-4o-mini,
-  gemini/anthropic 전환 가능). YOLO 아님 — `infer.py`/`synth_data.py`는
-  초기 YOLO 실험의 잔재로, 현재 파이프라인(`grade.py`)에서 쓰지 않는다.
+- 채점의 핵심은 VLM 판독(`flip/vlm.py`, 기본 OpenAI, gemini/anthropic 전환 가능).
+  OCR·structure는 쪽수·문제번호(anchor)로 **블록을 자르는 데까지만** 쓰고, 판정은
+  블록 통크롭을 통째로 VLM에 넘겨서 한다:
+  - 객관식 `read_mcq` — "동그라미 친 번호"를 읽어 정답 집합과 비교 (1회 호출).
+  - 주관식 `read_math` — 손글씨 값을 읽어 SymPy 동치 비교 (2회검증, 불일치는 보류).
+  실사진 실측 12문제 11~12정답·오채점 0 (구 방식은 1/12). 비용 gpt-5.6-luna
+  기준 페이지당 ~2.7원. `detail=high` 필수(low는 손글씨 오독), gpt-4o-mini는
+  고해상 타일링으로 입력토큰 30배라 금지.
+- 인쇄 마커 CV(`flip/mcq.py`)와 손글씨 격리(`handwriting.extract_crops`)는 실사진에서
+  실패해 현재 파이프라인에서 **쓰지 않는다**(selftest용으로만 잔존). YOLO 실험 잔재
+  (`infer.py`/`synth_data.py`)도 마찬가지 — `grade.py`는 위 VLM 경로만 탄다.
 - Linear: Team `AKR` (akran) / Project `FLIP-AI`
 - 브랜치 모델: main-only
 - QA 방법: 로컬 실행 (`--selftest` 및 실제 이미지 채점)

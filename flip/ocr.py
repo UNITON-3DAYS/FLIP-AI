@@ -8,6 +8,11 @@ from dataclasses import dataclass
 
 _engine = None  # PaddleOCR 인스턴스 캐시 (초기화가 느려서 재사용)
 
+# 검출·인식만 축소본으로 돌려 속도를 얻고, 좌표는 원본 스케일로 되돌린다.
+# 쪽수·문제번호 anchor는 크고 진해서 0.5배(≈826x1168)에서도 안전 (블록 6/6 유지).
+# ponytail: 고정 0.5배. 더 작은 글자를 놓치면 상향, 더 빠르게는 mobile det 교체.
+OCR_SCALE = 0.5
+
 
 @dataclass
 class OcrBox:
@@ -58,15 +63,21 @@ def run_ocr(gray_img, lang="korean"):
         )
     if gray_img.ndim == 2:  # PaddleOCR 전처리가 3채널을 요구
         gray_img = cv2.cvtColor(gray_img, cv2.COLOR_GRAY2BGR)
-    result = _engine.predict(gray_img)
+    if OCR_SCALE != 1.0:
+        small = cv2.resize(gray_img, None, fx=OCR_SCALE, fy=OCR_SCALE,
+                           interpolation=cv2.INTER_AREA)
+    else:
+        small = gray_img
+    result = _engine.predict(small)
+    inv = 1.0 / OCR_SCALE  # 축소본 좌표 -> 원본 좌표 복원
     boxes = []
     for page in result:  # predict는 페이지 리스트를 반환 (입력 1장이면 1개)
         texts = page.get("rec_texts", [])
         scores = page.get("rec_scores", [])
         polys = page.get("rec_polys", page.get("dt_polys", []))
         for text, score, poly in zip(texts, scores, polys):
-            xs = [p[0] for p in poly]
-            ys = [p[1] for p in poly]
+            xs = [p[0] * inv for p in poly]
+            ys = [p[1] * inv for p in poly]
             boxes.append(OcrBox(text=text, conf=float(score),
                                 x1=min(xs), y1=min(ys), x2=max(xs), y2=max(ys)))
     return boxes

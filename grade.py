@@ -24,20 +24,34 @@ IMAGE_EXTS = {".jpg", ".jpeg", ".png"}
 # ── stub 단계 (후속 티켓이 교체) ─────────────────────────────────────────
 
 def grade_mcq(color, gray, boxes, block, question):
-    """객관식: 인쇄 선택지 마커 주변 마킹 검출 (flip/mcq.py)."""
-    from flip import mcq  # 지역 import: stub 교체 시 상단 import 충돌 최소화
-    return mcq.grade(color, gray, boxes, block, question)
+    """객관식: 문제 블록을 통째로 VLM에 넘겨 동그라미 친 번호를 읽는다.
+
+    구 flip/mcq.py CV 방식(인쇄 마커 기준 형제 비교)은 실사진에서 실패(12중 1정답)라
+    블록크롭 VLM 판독으로 대체. 마킹 집합이 정답 집합과 같으면 O.
+    """
+    if not vlm.available():
+        return QuestionResult(question.question_no, HOLD, detail="VLM API 키 없음")
+    x1, y1, x2, y2 = block
+    picked = vlm.read_mcq(color[y1:y2, x1:x2])
+    if picked is None:
+        return QuestionResult(question.question_no, HOLD, detail="마킹 인식 불확실")
+    answer = question.answer if isinstance(question.answer, list) else [question.answer]
+    ok = set(picked) == {int(a) for a in answer}
+    return QuestionResult(question.question_no, O if ok else X,
+                          student_answer=",".join(map(str, picked)))
 
 
 def grade_subjective(color, gray, boxes, block, question):
-    """주관식: 손글씨 크롭 추출 → VLM 인식 → SymPy 동치 비교."""
-    crops = handwriting.extract_crops(gray, boxes, block)
-    if not crops:
-        return QuestionResult(question.question_no, HOLD,
-                              detail="손글씨 답 없음(또는 인쇄 위 겹쳐씀)")
+    """주관식: 문제 블록을 통째로 VLM에 넘겨 손글씨 답 인식 → SymPy 동치 비교.
+
+    구 손글씨격리(OCR 마스킹) 방식은 실사진에서 0/5로 실패 — 격리 크롭이 인쇄
+    잔재를 답으로 오독하거나 손글씨를 통째로 놓쳤다. 블록크롭을 통으로 넘기고
+    프롬프트로 "손글씨만 읽어라"를 지시하는 편이 5/5로 안정적(측정). 2회검증 유지.
+    """
     if not vlm.available():
         return QuestionResult(question.question_no, HOLD, detail="VLM API 키 없음")
-    student = vlm.read_math(crops[0])  # 후보 중 가장 큰 크롭
+    x1, y1, x2, y2 = block
+    student = vlm.read_math(color[y1:y2, x1:x2])
     if student is None:
         return QuestionResult(question.question_no, HOLD, detail="인식 불확실")
     verdict = equivalence.equivalent(student, question.answer)

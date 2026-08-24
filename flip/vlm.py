@@ -12,6 +12,7 @@
 """
 import base64
 import os
+import re
 
 import cv2
 import requests
@@ -19,6 +20,9 @@ import requests
 TIMEOUT = 20      # 초 (reasoning 모델은 사고 시간이 있어 여유 있게)
 MAX_TOKENS = 100  # 답은 한 줄이라 짧게 (reasoning 모델은 아래에서 여유를 더 준다)
 REASONING_MAX_TOKENS = 2000  # reasoning 모델은 사고 토큰이 한도를 먼저 소진하므로 크게
+# OpenAI 이미지 해상도. low는 손글씨·동그라미를 놓쳐 오답을 낸다(측정: 85를 14로 오독).
+# 크롭이 작아 high여도 문제당 ~750토큰($0.00015)로 저렴 — 정확도를 산다.
+DETAIL = "high"
 
 # LaTeX가 아니라 선형 표기를 강제하는 이유: sympy parse_latex는 antlr 의존성이
 # 필요해서 피한다. flip/equivalence.py가 이 표기를 그대로 파싱한다.
@@ -31,12 +35,18 @@ PROMPT = (
     "인쇄와 손글씨가 섞여 있으면 손글씨 부분만 읽어라."
 )
 
+# 객관식: 문제 블록을 통째로 넘겨 학생이 친 마킹 번호만 받는다 (인쇄 마커 CV 대체).
+MCQ_PROMPT = (
+    "객관식 문제 이미지다. 학생이 손으로 동그라미(또는 체크) 표시한 선택지 번호만 "
+    "출력해라. 여러 개면 쉼표로 구분 (예: 2,4). 표시가 없으면 NONE. 숫자만, 다른 말 금지."
+)
+
 # 읽기 거부 응답 (둘 다 None 처리 → 호출부 보류). PRINTED는 마스킹을 빠져나온
 # 인쇄 수식이 답 후보로 잘못 올라온 경우의 마지막 방어선이다.
 REFUSALS = {"UNSURE", "PRINTED"}
 
 DEFAULT_MODELS = {
-    "openai": "gpt-4o-mini",
+    "openai": "gpt-5.6-luna",
     "gemini": "gemini-2.0-flash",
     "anthropic": "claude-opus-5",
 }
@@ -75,7 +85,7 @@ def _extract_responses_text(data):
     return None
 
 
-def _call_openai(b64, key, model):
+def _call_openai(b64, key, model, prompt):
     """OpenAI Responses API 주경로 (GPT-5 세대 권장 방식).
 
     reasoning effort는 FLIP_VLM_REASONING 설정 시에만 보낸다 — 크롭 읽기는
@@ -87,8 +97,9 @@ def _call_openai(b64, key, model):
         "model": model,
         "max_output_tokens": REASONING_MAX_TOKENS,  # 사고 토큰이 한도를 먼저 먹는다
         "input": [{"role": "user", "content": [
-            {"type": "input_text", "text": PROMPT},
-            {"type": "input_image", "image_url": f"data:image/jpeg;base64,{b64}"},
+            {"type": "input_text", "text": prompt},
+            {"type": "input_image",
+             "image_url": f"data:image/jpeg;base64,{b64}", "detail": DETAIL},
         ]}],
     }
     effort = os.environ.get("FLIP_VLM_REASONING")
@@ -102,9 +113,9 @@ def _call_openai(b64, key, model):
     # 폴백: Responses를 모르는 구모델/구계정 → Chat Completions (구파라미터)
     legacy = {"model": model, "max_tokens": MAX_TOKENS,
               "messages": [{"role": "user", "content": [
-                  {"type": "text", "text": PROMPT},
+                  {"type": "text", "text": prompt},
                   {"type": "image_url",
-                   "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
+                   "image_url": {"url": f"data:image/jpeg;base64,{b64}", "detail": DETAIL}},
               ]}]}
     r = requests.post("https://api.openai.com/v1/chat/completions",
                       headers=headers, json=legacy, timeout=TIMEOUT)
@@ -112,12 +123,12 @@ def _call_openai(b64, key, model):
     return r.json()["choices"][0]["message"]["content"]
 
 
-def _call_gemini(b64, key, model):
+def _call_gemini(b64, key, model, prompt):
     r = requests.post(
         f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
         params={"key": key},
         json={"contents": [{"parts": [
-            {"text": PROMPT},
+            {"text": prompt},
             {"inline_data": {"mime_type": "image/jpeg", "data": b64}},
         ]}]},
         timeout=TIMEOUT)
@@ -125,7 +136,7 @@ def _call_gemini(b64, key, model):
     return r.json()["candidates"][0]["content"]["parts"][0]["text"]
 
 
-def _call_anthropic(b64, key, model):
+def _call_anthropic(b64, key, model, prompt):
     r = requests.post(
         "https://api.anthropic.com/v1/messages",
         headers={
@@ -139,7 +150,7 @@ def _call_anthropic(b64, key, model):
             "messages": [{"role": "user", "content": [
                 {"type": "image", "source": {
                     "type": "base64", "media_type": "image/jpeg", "data": b64}},
-                {"type": "text", "text": PROMPT},
+                {"type": "text", "text": prompt},
             ]}],
         },
         timeout=TIMEOUT)
@@ -156,14 +167,14 @@ def _call_anthropic(b64, key, model):
 _CALLS = {"openai": _call_openai, "gemini": _call_gemini, "anthropic": _call_anthropic}
 
 
-def _call(b64):
+def _call(b64, prompt=PROMPT):
     """1회 호출 → 정리된 응답 문자열. 어떤 실패든 None."""
     key = os.environ.get("FLIP_VLM_API_KEY")
     call = _CALLS.get(_provider())
     if not key or call is None:
         return None
     try:
-        text = call(b64, key, _model())
+        text = call(b64, key, _model(), prompt)
     except Exception:
         return None  # 네트워크 오류/타임아웃/응답 형식 불일치 전부 보류로
     if not text:
@@ -192,6 +203,25 @@ def read_math(crop):
     return first
 
 
+def read_mcq(block_crop):
+    """객관식 문제 블록 크롭 → 학생이 친 선택지 번호 [정렬된 int]. 불확실/무마킹은 None.
+
+    블록을 통째로 넘겨 VLM이 동그라미 친 번호를 읽는다 (구 mcq.py CV 대체).
+    출력이 수 토큰·reasoning 0이라 read_math와 달리 1회면 충분 — detail=high가
+    동그라미 판독의 핵심(저해상도는 마킹을 놓쳐 오답을 냄, 측정으로 확인).
+    """
+    if not available():
+        return None
+    b64 = _encode_jpeg_b64(block_crop)
+    if b64 is None:
+        return None
+    text = _call(b64, MCQ_PROMPT)
+    if not text or text.upper() in REFUSALS or "NONE" in text.upper():
+        return None  # 인식 실패/무마킹 → 호출부가 보류
+    nums = sorted({int(n) for n in re.findall(r"[1-9]", text)})
+    return nums or None
+
+
 def _selftest():
     import numpy as np
 
@@ -202,12 +232,14 @@ def _selftest():
         assert available() is False
         crop = np.full((30, 60), 255, np.uint8)
         assert read_math(crop) is None  # 키 없음 → 호출 없이 None
+        assert read_mcq(crop) is None   # 객관식도 키 없으면 호출 없이 None
 
         os.environ["FLIP_VLM_API_KEY"] = "test-key"
         assert available() is True
         # provider 오설정이어도 크래시 없이 None
         os.environ["FLIP_VLM_PROVIDER"] = "unknown"
         assert _call("") is None
+        assert read_mcq(crop) is None   # 응답 None → 파싱 안 하고 보류
     finally:
         for k, v in saved.items():
             if v is None:
