@@ -16,8 +16,8 @@ from synth_data import CLASSES  # 클래스 순서 공유 (id -> 문자)
 DISPLAY = {"pi": "π"}  # 클래스명 -> 표시/채점용 기호
 
 # ── 로컬 테스트: 아래 3개만 바꾸고  `python infer.py`  실행 (CLI 인자로도 덮어씀) ──
-MODEL = "/Users/akran/Downloads/best.pt"   # Colab 셀8로 받은 모델 경로
-IMAGE = "test_images/KakaoTalk_Photo_2026-08-24-19-42-59.jpeg"   # test_images/ 에 사진 넣고 여기 파일명만 바꾸면 됨
+MODEL = "/Users/akran/Downloads/best_256.pt"   # Colab 셀8로 받은 모델 경로
+IMAGE = "test_images/KakaoTalk_Photo_2026-08-24-23-20-52.jpeg"   # test_images/ 에 사진 넣고 여기 파일명만 바꾸면 됨
 ANSWER = "-367"                            # 채점하려면 "-367" 처럼, 인식만 볼거면 None
 
 
@@ -59,7 +59,9 @@ def read_answer(model, image_path, conf=0.25, imgsz=128, autocrop=True):
     img = ImageOps.exif_transpose(Image.open(image_path)).convert("RGB")  # 폰 사진 회전 보정
     if autocrop:
         img = crop_to_ink(img)
-    r = model.predict(img, imgsz=imgsz, conf=conf, agnostic_nms=True, verbose=False)[0]
+    # agnostic_nms=False(클래스별 NMS): 겹친 '다른 글자'(예: - 와 3)를 중복으로 안 지움.
+    # 같은 글자 중복만 정리. 붙여쓴 답을 살리는 핵심 설정.
+    r = model.predict(img, imgsz=imgsz, conf=conf, agnostic_nms=False, verbose=False)[0]
     dets = [(float(b.xywh[0][0]), int(b.cls), float(b.conf)) for b in r.boxes]
     text, ans_conf, per = assemble(dets)
     return text, ans_conf, per, r
@@ -84,7 +86,7 @@ def main():
     ap.add_argument("--image", default=IMAGE)
     ap.add_argument("--answer", default=ANSWER, help="정답(주면 채점)")
     ap.add_argument("--conf", type=float, default=0.25, help="검출 최소 conf")
-    ap.add_argument("--imgsz", type=int, default=128, help="추론 해상도 (학습과 동일)")
+    ap.add_argument("--imgsz", type=int, default=256, help="추론 해상도 (학습과 동일! best_256->256)")
     ap.add_argument("--review", type=float, default=0.5, help="이 미만이면 사람 확인")
     ap.add_argument("--no-save", dest="save", action="store_false", help="박스 이미지 저장 안 함")
     ap.add_argument("--no-autocrop", dest="autocrop", action="store_false", help="자동 크롭 끔")

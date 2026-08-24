@@ -69,8 +69,8 @@ def load_pool(dataset_dir: str):
             raise FileNotFoundError(
                 f"클래스 '{cls}' 폴더 없음: {folder}  -> CLASS_FOLDERS 확인/수정"
             )
-        files = [p for p in folder.iterdir()
-                 if p.suffix.lower() in (".jpg", ".jpeg", ".png", ".bmp")]
+        files = sorted(p for p in folder.iterdir()   # sorted: run마다 순서 고정(재현성)
+                       if p.suffix.lower() in (".jpg", ".jpeg", ".png", ".bmp"))
         if not files:
             raise FileNotFoundError(f"{folder} 에 이미지가 없음")
         pool[cls] = files
