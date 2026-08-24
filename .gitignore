@@ -1,0 +1,23 @@
+docs/*
+
+# 가상환경 / 파이썬
+.venv/
+__pycache__/
+*.pyc
+
+# 모델 가중치 (Colab에서 학습/다운로드)
+*.pt
+
+# 학습 산출물
+runs/
+data/
+
+# 테스트 이미지 & 추론 결과 (개인 사진, 자주 바뀜)
+test_images/
+pred_*
+
+# 합성 미리보기 이미지
+synth_*.png
+
+# macOS
+.DS_Store
