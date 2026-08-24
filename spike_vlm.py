@@ -41,22 +41,36 @@ def encode_image(path):
 
 
 def call_openai(key, model, b64):
-    messages = [{"role": "user", "content": [
-        {"type": "text", "text": PROMPT},
-        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
-    ]}]
-    # GPT-5 세대: max_completion_tokens + (선택) reasoning_effort. 400이면 구파라미터 재시도.
-    payload = {"model": model, "max_completion_tokens": 2000, "messages": messages}
+    # Responses API 주경로 (GPT-5 세대 권장). 실패 시 Chat Completions 폴백.
+    headers = {"Authorization": f"Bearer {key}"}
+    payload = {
+        "model": model,
+        "max_output_tokens": 2000,  # reasoning 모델은 사고 토큰이 한도를 먼저 먹는다
+        "input": [{"role": "user", "content": [
+            {"type": "input_text", "text": PROMPT},
+            {"type": "input_image", "image_url": f"data:image/jpeg;base64,{b64}"},
+        ]}],
+    }
     effort = os.environ.get("FLIP_VLM_REASONING")
     if effort:
-        payload["reasoning_effort"] = effort
-    r = requests.post("https://api.openai.com/v1/chat/completions",
-                      headers={"Authorization": f"Bearer {key}"}, json=payload, timeout=30)
-    if r.status_code == 400:
-        r = requests.post("https://api.openai.com/v1/chat/completions",
-                          headers={"Authorization": f"Bearer {key}"},
-                          json={"model": model, "max_tokens": 100, "messages": messages},
-                          timeout=30)
+        payload["reasoning"] = {"effort": effort}
+    r = requests.post("https://api.openai.com/v1/responses",
+                      headers=headers, json=payload, timeout=30)
+    if r.status_code < 400:
+        for item in r.json().get("output", []):
+            if item.get("type") == "message":
+                for c in item.get("content", []):
+                    if c.get("type") == "output_text":
+                        return c["text"].strip()
+        return "ERROR: 응답에서 텍스트 추출 실패"
+    r = requests.post("https://api.openai.com/v1/chat/completions", headers=headers,
+                      json={"model": model, "max_tokens": 100, "messages": [{
+                          "role": "user", "content": [
+                              {"type": "text", "text": PROMPT},
+                              {"type": "image_url",
+                               "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
+                          ]}]},
+                      timeout=30)
     r.raise_for_status()
     return r.json()["choices"][0]["message"]["content"].strip()
 
