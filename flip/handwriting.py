@@ -1,7 +1,11 @@
 """손글씨 답 후보 추출: 인쇄(OCR 박스) 마스킹 후 남은 잉크를 크롭.
 
 읽기는 VLM(flip/vlm.py) 몫이고, 여기서는 "블록 안 어디에 손글씨가 있는가"만 찾는다.
-- OCR이 검출한 영역 = 인쇄체로 보고 하얗게 지운다 (텍스트를 읽을 필요는 없음).
+- OCR이 **높은 신뢰도로** 인식한 영역만 인쇄체로 보고 하얗게 지운다 (읽을 필요 없음).
+  OCR detection은 또박또박 쓴 손글씨도 잡는데, 그런 상자는 인식 신뢰도가 낮게
+  나오므로 지우지 않고 남긴다 — 학생 답이 "인쇄"로 오인돼 지워지는 사고 방지.
+  반대로 신뢰도가 낮은 인쇄 수식이 후보에 섞이는 건 VLM 프롬프트의 PRINTED
+  탈출구(flip/vlm.py)가 최종 방어한다.
 - 남은 잉크를 adaptive threshold → connected components로 뭉치고, 가까운 성분끼리
   병합해(같은 답의 글자들) 답 후보 크롭을 만든다.
 - 후보 없음 = 빈 리스트: 답을 안 썼거나 인쇄 위에 겹쳐 쓴 경우 → 호출부가 보류.
@@ -11,6 +15,8 @@ import numpy as np
 
 # ── 튜닝 포인트 ──────────────────────────────────────────────────────────
 MASK_PAD = 4          # OCR 박스 마스킹 여유 (px)
+MASK_CONF_MIN = 0.75  # 이 신뢰도 이상인 OCR 상자만 인쇄로 보고 지운다.
+                      # 인쇄 지문은 보통 0.9+, 손글씨는 그보다 낮다.
 THRESH_BLOCK = 31     # adaptive threshold 블록 크기 (홀수)
 THRESH_C = 15         # adaptive threshold 보정 상수
 MIN_AREA = 60         # 이 미만 픽셀 수 성분은 노이즈로 버림
@@ -30,6 +36,8 @@ def _mask_printed(gray, boxes, block):
     y2 = min(h, int(round(block[3])))
     region = gray[y1:y2, x1:x2].copy()
     for b in boxes:
+        if b.conf < MASK_CONF_MIN:
+            continue  # 신뢰도 낮음 = 손글씨(또는 인쇄 수식)일 수 있어 지우지 않음
         if b.x2 <= x1 or b.x1 >= x2 or b.y2 <= y1 or b.y1 >= y2:
             continue  # block과 겹치지 않는 박스
         bx1 = max(0, int(b.x1) - x1 - MASK_PAD)
@@ -157,6 +165,15 @@ def _selftest():
     blank = np.full((400, 600), 255, np.uint8)
     cv2.putText(blank, "1. abc", (40, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.8, 0, 2)
     assert extract_crops(blank, [OcrBox("1. abc", 0.9, 30, 35, 170, 75)], block) == []
+
+    # OCR이 손글씨를 상자로 잡아도(낮은 conf) 마스킹되지 않고 살아남는다
+    low_conf_boxes = boxes + [OcrBox("x?", 0.45, 370, 240, 490, 310)]  # 손글씨 위 상자
+    _, rects_low = _candidates(canvas, low_conf_boxes, block)
+    assert rects_low, "낮은 신뢰도 상자는 지우면 안 된다 (학생 답 보존)"
+    # 같은 상자가 높은 conf면 인쇄로 보고 지워져서 후보가 사라진다
+    high_conf_boxes = boxes + [OcrBox("x2", 0.95, 370, 240, 490, 310)]
+    _, rects_high = _candidates(canvas, high_conf_boxes, block)
+    assert not rects_high, "높은 신뢰도 상자는 인쇄로 마스킹돼야 한다"
 
     # 세로 분수: 분자/분수선/분모가 MERGE_GAP보다 벌어져도 크롭 하나로 합쳐진다
     frac = np.full((400, 600), 255, np.uint8)
