@@ -41,15 +41,22 @@ def encode_image(path):
 
 
 def call_openai(key, model, b64):
-    r = requests.post(
-        "https://api.openai.com/v1/chat/completions",
-        headers={"Authorization": f"Bearer {key}"},
-        json={"model": model, "max_tokens": 100, "messages": [{
-            "role": "user", "content": [
-                {"type": "text", "text": PROMPT},
-                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
-            ]}]},
-        timeout=30)
+    messages = [{"role": "user", "content": [
+        {"type": "text", "text": PROMPT},
+        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
+    ]}]
+    # GPT-5 세대: max_completion_tokens + (선택) reasoning_effort. 400이면 구파라미터 재시도.
+    payload = {"model": model, "max_completion_tokens": 2000, "messages": messages}
+    effort = os.environ.get("FLIP_VLM_REASONING")
+    if effort:
+        payload["reasoning_effort"] = effort
+    r = requests.post("https://api.openai.com/v1/chat/completions",
+                      headers={"Authorization": f"Bearer {key}"}, json=payload, timeout=30)
+    if r.status_code == 400:
+        r = requests.post("https://api.openai.com/v1/chat/completions",
+                          headers={"Authorization": f"Bearer {key}"},
+                          json={"model": model, "max_tokens": 100, "messages": messages},
+                          timeout=30)
     r.raise_for_status()
     return r.json()["choices"][0]["message"]["content"].strip()
 
