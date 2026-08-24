@@ -42,9 +42,22 @@ def available():
 def run_ocr(gray_img, lang="korean"):
     """보정된 그레이 이미지 -> [OcrBox]. PaddleOCR 미설치면 ImportError."""
     global _engine
-    from paddleocr import PaddleOCR  # 지연 import
+    import os
+    import cv2  # 지연 import: paddleocr와 함께 실제 실행 시에만
+    from paddleocr import PaddleOCR
     if _engine is None:
-        _engine = PaddleOCR(lang=lang, use_textline_orientation=True)
+        # 프로세스마다 도는 원격 모델소스 체크 생략 (수십 초 낭비)
+        os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
+        _engine = PaddleOCR(
+            lang=lang,
+            use_textline_orientation=True,
+            # 입력은 preprocess가 정면화한다. 문서 방향/왜곡 모델은 CPU에서 페이지당
+            # 수십 초를 먹는 순수 낭비. 90도 눕은 사진이 들어오면 다시 켤 것.
+            use_doc_orientation_classify=False,
+            use_doc_unwarping=False,
+        )
+    if gray_img.ndim == 2:  # PaddleOCR 전처리가 3채널을 요구
+        gray_img = cv2.cvtColor(gray_img, cv2.COLOR_GRAY2BGR)
     result = _engine.predict(gray_img)
     boxes = []
     for page in result:  # predict는 페이지 리스트를 반환 (입력 1장이면 1개)

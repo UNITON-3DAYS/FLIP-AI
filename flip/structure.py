@@ -9,11 +9,18 @@
 import re
 
 import cv2
+import numpy as np
 
 # "12." "12)" "7-1." "7-1" 등. 인식 잡음으로 붙는 공백 허용.
 ANCHOR_RE = re.compile(r"^\s*(\d{1,3}(?:-\d{1,2})?)\s*[.)]")
 ANCHOR_BARE_RE = re.compile(r"^\s*(\d{1,3}-\d{1,2})\s*$")  # 소문항은 점 없이도 인정
-PAGE_NO_RE = re.compile(r"^\s*(\d{1,3})\s*$")
+# 쎈 등 4자리 연번은 점 없음. 난이도 아이콘이 '00596>'처럼 붙어도 앞 4자리만 취한다.
+# 오검출은 기대목록 LIS가 거른다.
+ANCHOR_BARE4_RE = re.compile(r"^\s*(\d{4})")
+# 쪽수는 "14·Ⅰ.수와 식"처럼 장 제목과 한 박스로 붙어 읽히기도 한다. 접두 숫자만 취하고
+# 오검출은 DB valid_pages 필터에 맡긴다.
+PAGE_NO_RE = re.compile(r"^\s*(\d{1,3})(?!\d)")
+PAGE_NO_TAIL_RE = re.compile(r"(?<!\d)(\d{1,3})\s*$")  # "01 유리수와 소수·15" 꼴은 끝 숫자
 
 
 def read_page_number(boxes, img_h, img_w, valid_pages):
@@ -22,12 +29,12 @@ def read_page_number(boxes, img_h, img_w, valid_pages):
     for b in boxes:
         if b.cy < img_h * 0.9:          # 하단 10% 띠만
             continue
-        m = PAGE_NO_RE.match(b.text)
-        if not m:
+        matches = (PAGE_NO_RE.match(b.text), PAGE_NO_TAIL_RE.search(b.text))
+        # 접두("14·Ⅰ...")·접미("01 유리수...·15") 후보 중 DB 유효 쪽수만 인정
+        pages = [m.group(1) for m in matches if m and m.group(1) in valid_pages]
+        if not pages:
             continue
-        page = m.group(1)
-        if page not in valid_pages:      # DB 유효 쪽수로 오인식 필터
-            continue
+        page = pages[0]
         # 모서리(좌우 25%)에 가까울수록 쪽수답다
         edge_dist = min(b.cx, img_w - b.cx)
         if edge_dist > img_w * 0.25:
@@ -39,18 +46,35 @@ def read_page_number(boxes, img_h, img_w, valid_pages):
 
 
 def split_columns(boxes, img_w):
-    """텍스트 박스 x 분포의 세로 여백 띠로 1단/2단 판별.
+    """텍스트 박스 x-커버리지로 1단/2단 판별.
+
+    페이지 중앙 30~70%에서 박스가 거의 안 덮는 x의 최장 연속 구간(단 여백 띠)을
+    찾아 그 중앙에서 나눈다. 고정 중앙 띠 방식은 본문 줄이 길어 여백이 좁은
+    문제집(쎈 등)에서 2단을 놓친다.
 
     반환: [(x_start, x_end)] 단 목록 (왼쪽부터).
     """
     if not boxes:
         return [(0, img_w)]
-    # 페이지 중앙 40~60% 구간에 박스가 걸치지 않는 세로 띠가 있으면 2단
-    mid_lo, mid_hi = img_w * 0.42, img_w * 0.58
-    gap_hits = [b for b in boxes if b.x1 < mid_hi and b.x2 > mid_lo]
-    # 걸친 박스가 전체의 10% 미만이면 중앙 여백으로 본다 (제목 등 소수 예외 허용)
-    if len(gap_hits) < max(2, len(boxes) * 0.10):
-        mid = img_w / 2
+    w = int(img_w)
+    cov = np.zeros(w + 1, dtype=int)
+    for b in boxes:
+        x1, x2 = max(0, int(b.x1)), min(w, int(b.x2))
+        if x2 > x1:
+            cov[x1] += 1
+            cov[x2] -= 1
+    cov = np.cumsum(cov)[:w]
+    lo, hi = int(w * 0.30), int(w * 0.70)
+    # 단을 가로지르는 제목 등 소수 예외 허용 (전체의 3%)
+    open_ = cov[lo:hi] < max(1, len(boxes) * 0.03)
+    best = run = 0
+    best_end = -1
+    for i, v in enumerate(open_):
+        run = run + 1 if v else 0
+        if run > best:
+            best, best_end = run, i
+    if best >= w * 0.015:  # 유의미한 폭의 여백 띠만 인정
+        mid = lo + best_end - best // 2
         return [(0, mid), (mid, img_w)]
     return [(0, img_w)]
 
@@ -59,7 +83,7 @@ def _anchor_text(text):
     m = ANCHOR_RE.match(text)
     if m:
         return m.group(1)
-    m = ANCHOR_BARE_RE.match(text)
+    m = ANCHOR_BARE_RE.match(text) or ANCHOR_BARE4_RE.match(text)
     return m.group(1) if m else None
 
 
@@ -206,6 +230,9 @@ def _selftest():
     # 소문항 패턴
     assert _anchor_text("7-1.") == "7-1" and _anchor_text("7-1") == "7-1"
     assert _anchor_text("(3)") is None
+    # 쎈 스타일 4자리 연번 (난이도 아이콘 잡음 포함)
+    assert _anchor_text("0062") == "0062" and _anchor_text("00596>") == "0059"
+    assert _anchor_text("0063$>") == "0063" and _anchor_text("123") is None
 
     print("structure selftest OK")
 

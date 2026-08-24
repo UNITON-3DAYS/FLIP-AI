@@ -118,7 +118,7 @@ def _features(binary, roi, marker_h):
     lines = cv2.HoughLinesP(patch, 1, np.pi / 180, threshold=20,
                             minLineLength=int(marker_h), maxLineGap=3)
     if lines is not None:
-        for lx1, ly1, lx2, ly2 in lines[:, 0]:
+        for lx1, ly1, lx2, ly2 in lines.reshape(-1, 4):  # 빌드에 따라 (N,1,4)/(N,4) 혼재
             ang = abs(np.degrees(np.arctan2(int(ly2) - int(ly1), int(lx2) - int(lx1)))) % 180
             ang = min(ang, 180 - ang)
             if DIAG_MIN_DEG <= ang <= DIAG_MAX_DEG:
