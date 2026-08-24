@@ -65,31 +65,49 @@ def _encode_jpeg_b64(img):
 
 # ── provider별 REST 호출 ─────────────────────────────────────────────────
 
+def _extract_responses_text(data):
+    """Responses API 응답 JSON에서 output_text를 꺼낸다. 없으면 None."""
+    for item in data.get("output", []):
+        if item.get("type") == "message":
+            for c in item.get("content", []):
+                if c.get("type") == "output_text":
+                    return c.get("text")
+    return None
+
+
 def _call_openai(b64, key, model):
-    messages = [{"role": "user", "content": [
-        {"type": "text", "text": PROMPT},
-        {"type": "image_url",
-         "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
-    ]}]
-    # GPT-5 세대는 max_tokens를 거부하고 max_completion_tokens를 요구한다.
-    # 크롭 읽기는 단순 작업이라 reasoning effort는 낮출수록 빠르다
-    # (FLIP_VLM_REASONING 미설정 시 파라미터 자체를 안 보낸다 — 구모델 호환).
-    payload = {"model": model, "max_completion_tokens": REASONING_MAX_TOKENS,
-               "messages": messages}
+    """OpenAI Responses API 주경로 (GPT-5 세대 권장 방식).
+
+    reasoning effort는 FLIP_VLM_REASONING 설정 시에만 보낸다 — 크롭 읽기는
+    단순 작업이라 minimal/low가 빠르고 싸다. Responses 미지원 구모델이면
+    Chat Completions로 폴백.
+    """
+    headers = {"Authorization": f"Bearer {key}"}
+    payload = {
+        "model": model,
+        "max_output_tokens": REASONING_MAX_TOKENS,  # 사고 토큰이 한도를 먼저 먹는다
+        "input": [{"role": "user", "content": [
+            {"type": "input_text", "text": PROMPT},
+            {"type": "input_image", "image_url": f"data:image/jpeg;base64,{b64}"},
+        ]}],
+    }
     effort = os.environ.get("FLIP_VLM_REASONING")
     if effort:
-        payload["reasoning_effort"] = effort
-    r = requests.post(
-        "https://api.openai.com/v1/chat/completions",
-        headers={"Authorization": f"Bearer {key}"},
-        json=payload, timeout=TIMEOUT)
-    if r.status_code == 400:
-        # 구세대 모델(gpt-4o 등)이 max_completion_tokens를 모르면 구파라미터로 재시도
-        legacy = {"model": model, "max_tokens": MAX_TOKENS, "messages": messages}
-        r = requests.post(
-            "https://api.openai.com/v1/chat/completions",
-            headers={"Authorization": f"Bearer {key}"},
-            json=legacy, timeout=TIMEOUT)
+        payload["reasoning"] = {"effort": effort}
+    r = requests.post("https://api.openai.com/v1/responses",
+                      headers=headers, json=payload, timeout=TIMEOUT)
+    if r.status_code < 400:
+        return _extract_responses_text(r.json())
+
+    # 폴백: Responses를 모르는 구모델/구계정 → Chat Completions (구파라미터)
+    legacy = {"model": model, "max_tokens": MAX_TOKENS,
+              "messages": [{"role": "user", "content": [
+                  {"type": "text", "text": PROMPT},
+                  {"type": "image_url",
+                   "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
+              ]}]}
+    r = requests.post("https://api.openai.com/v1/chat/completions",
+                      headers=headers, json=legacy, timeout=TIMEOUT)
     r.raise_for_status()
     return r.json()["choices"][0]["message"]["content"]
 
