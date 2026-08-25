@@ -74,7 +74,7 @@ REFUSALS = {"UNSURE", "PRINTED"}
 
 DEFAULT_MODELS = {
     "openai": "gpt-5.6-luna",
-    "gemini": "gemini-2.0-flash",
+    "gemini": "gemini-2.5-flash",
     "anthropic": "claude-opus-5",
 }
 
@@ -176,13 +176,15 @@ def _call_openai(b64, key, model, prompt, max_out=REASONING_MAX_TOKENS):
 
 
 def _call_gemini(b64, key, model, prompt, max_out=REASONING_MAX_TOKENS):
+    # maxOutputTokens에 thinking 토큰도 포함되므로(2.5 계열) max_out 여유를 그대로 쓴다.
     r = requests.post(
         f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
         params={"key": key},
         json={"contents": [{"parts": [
             {"text": prompt},
             {"inline_data": {"mime_type": "image/jpeg", "data": b64}},
-        ]}]},
+        ]}],
+            "generationConfig": {"maxOutputTokens": max_out}},
         timeout=TIMEOUT)
     r.raise_for_status()
     return r.json()["candidates"][0]["content"]["parts"][0]["text"]
