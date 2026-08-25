@@ -8,10 +8,14 @@ __pycache__/
 # 비밀정보
 .env
 
-# 저작권 자료 (교재 자료·실제 정답 DB) — 절대 이미지에 넣지 않는다
+# 저작권 자료 (교재 자료·실제 정답 DB) — 절대 이미지에 넣지 않는다.
+# 정답 DB는 런타임에 볼륨(/answers)으로만 주입한다. 이미지에 굽지 않는다.
 samples/
 *.pdf
 db.ssen*.json
+answer/
+request*.json
+exam_myexam.*
 
 # 개인 사진·추론 결과
 test_images/

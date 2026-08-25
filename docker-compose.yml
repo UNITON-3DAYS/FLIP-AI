@@ -3,7 +3,8 @@
 services:
   flip:
     build: .
-    image: flip-ai:latest
+    # 로컬은 기본값으로 빌드, 서버(CD)는 FLIP_DOCKER_IMAGE로 DockerHub 이미지를 당겨 쓴다.
+    image: ${FLIP_DOCKER_IMAGE:-flip-ai:latest}
     ports:
       - "8000:8000"
     # 실제 키(FLIP_VLM_API_KEY 등)는 .env로 주입. 없으면 무시하고 뜬다(채점은 보류).

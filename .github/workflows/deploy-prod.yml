@@ -1,0 +1,79 @@
+name: deploy-prod
+
+# main push 시 이미지를 빌드→DockerHub push→SSH 서버에서 pull·재기동.
+# Backend(FLIP-Backend)의 deploy-prod.yml과 같은 방식. AI는 파이썬이라 Gradle/JDK 단계만 뺐다.
+#
+# 필요한 repo secrets:
+#   DOCKERHUB_USERNAME / DOCKERHUB_PASSWORD / DOCKERHUB_REPOSITORY  (예: flip-ai)
+#   SSH_HOST / SSH_USERNAME / SSH_PRIVATE_KEY
+#   FLIP_VLM_API_KEY  (채점 키 — 없으면 서버는 뜨지만 채점은 전부 보류)
+
+on:
+  push:
+    branches: [ "main" ]
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Docker build & push
+        run: |
+          echo "${{ secrets.DOCKERHUB_PASSWORD }}" | docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
+          IMAGE_TAG="${{ secrets.DOCKERHUB_USERNAME }}/${{ secrets.DOCKERHUB_REPOSITORY }}:prod-${GITHUB_SHA::7}"
+          docker build -t "${IMAGE_TAG}" .
+          docker push "${IMAGE_TAG}"
+
+      - name: Copy docker-compose.yml to server
+        uses: appleboy/scp-action@master
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USERNAME }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          source: "docker-compose.yml"
+          target: "~/flip-ai/"
+
+      - name: Deploy
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USERNAME }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          envs: GITHUB_SHA
+          script: |
+            cd ~/flip-ai
+            touch .env
+
+            IMAGE_TAG="${{ secrets.DOCKERHUB_USERNAME }}/${{ secrets.DOCKERHUB_REPOSITORY }}:prod-${GITHUB_SHA::7}"
+            sudo docker login -u ${{ secrets.DOCKERHUB_USERNAME }} -p ${{ secrets.DOCKERHUB_PASSWORD }}
+            sudo docker pull "${IMAGE_TAG}"
+
+            # 서버 .env를 최신 이미지 태그·채점 키·서버 런타임 설정으로 갱신 (기존 줄은 지우고 다시 씀)
+            # 서버는 OCR 없는 fullpage 그레이더 + 워밍업 끔(FLIP_WARMUP_OCR=0)으로 고정.
+            sed -i '/^FLIP_DOCKER_IMAGE=/d;/^FLIP_VLM_API_KEY=/d;/^FLIP_VLM_PROVIDER=/d;/^FLIP_VLM_MODEL=/d;/^FLIP_GRADER=/d;/^FLIP_WARMUP_OCR=/d' .env
+            echo "FLIP_DOCKER_IMAGE=${IMAGE_TAG}" >> .env
+            echo "FLIP_VLM_API_KEY=${{ secrets.FLIP_VLM_API_KEY }}" >> .env
+            # provider·model은 secret이 있을 때만 기록. 비면 코드 기본값(openai/gpt-5.6-luna)에 맡긴다.
+            # (빈 FLIP_VLM_PROVIDER를 쓰면 기본값이 안 먹어 채점이 깨지므로 조건부로 쓴다)
+            if [ -n "${{ secrets.FLIP_VLM_PROVIDER }}" ]; then echo "FLIP_VLM_PROVIDER=${{ secrets.FLIP_VLM_PROVIDER }}" >> .env; fi
+            if [ -n "${{ secrets.FLIP_VLM_MODEL }}" ]; then echo "FLIP_VLM_MODEL=${{ secrets.FLIP_VLM_MODEL }}" >> .env; fi
+            echo "FLIP_GRADER=fullpage" >> .env
+            echo "FLIP_WARMUP_OCR=0" >> .env
+
+            # 당겨온 이미지로 재기동 (--no-build: 서버에서 빌드하지 않는다)
+            sudo docker compose up -d --no-build flip
+
+            # 기동 확인: /health가 200이 될 때까지 대기. 안 뜨면 로그 남기고 배포 실패 처리.
+            ok=""
+            for i in $(seq 1 30); do
+              if curl -sf http://localhost:8000/health; then echo; echo "health OK"; ok=1; break; fi
+              sleep 2
+            done
+            sudo docker compose logs --tail=50 flip || true
+            sudo docker image prune -af
+            test "$ok" = "1"
