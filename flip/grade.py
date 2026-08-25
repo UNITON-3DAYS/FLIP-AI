@@ -104,11 +104,23 @@ def _qkey(k):
     return re.sub(r"^0+(\d)", r"\1", str(k))
 
 
+def _page_slices():
+    """페이지를 세로로 몇 등분해 읽을지 (FLIP_PAGE_SLICES, 기본 2). 1이면 단일 콜.
+
+    단일 콜은 OpenAI가 4032²를 ~1024×768로 줄여 봐서 작은 손글씨를 오독한다. 2분할이면
+    조각당 유효해상도가 ~2배(가로 2048)라 답 픽셀이 커진다. 비용은 ~2.9배(출력토큰 증가).
+    """
+    try:
+        return max(1, int(os.environ.get("FLIP_PAGE_SLICES", "2")))
+    except ValueError:
+        return 2
+
+
 def _grade_fullpage(color, db, page_hint, label):
-    """페이지 전체를 VLM 1콜로 채점 (OCR·블록절단 없음)."""
+    """페이지를 세로 등분해 조각별 VLM 판독 후 병합해 채점 (OCR·블록절단 없음)."""
     if not vlm.available():
         return PageResult(image=label, hold_reason="VLM API 키 없음")
-    page_no, answers = vlm.read_page(color)
+    page_no, answers = vlm.read_page_split(color, slices=_page_slices())
     page_no = page_hint or page_no
     if not page_no or page_no not in db.valid_pages():
         # 쪽수를 못 읽으면 문제 목록을 모른다 → 페이지 전체 보류.
