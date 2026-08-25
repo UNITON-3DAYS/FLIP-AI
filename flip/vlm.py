@@ -257,8 +257,7 @@ def _call(b64, prompt=PROMPT, max_out=REASONING_MAX_TOKENS):
         log.warning("VLM %s/%s 응답 비어있음(보류, %.1fs)", provider, model, dt)
         return None
     text = text.strip().strip("`").strip()
-    log.info("VLM %s/%s ok %.1fs → %r", provider, model, dt,
-             text[:60] + ("…" if len(text) > 60 else ""))
+    log.info("VLM %s/%s ok %.1fs → %r", provider, model, dt, text)
     return text
 
 
