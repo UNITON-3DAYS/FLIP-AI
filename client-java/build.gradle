@@ -53,6 +53,9 @@ tasks.named('compileJava') { dependsOn tasks.named('openApiGenerate') }
 dependencies {
     api 'com.fasterxml.jackson.core:jackson-databind:2.17.2'
     api 'com.fasterxml.jackson.datatype:jackson-datatype-jsr310:2.17.2'
+    // nullable 필드(FastAPI ValidationError 등)에 쓰이는 JsonNullable 지원. 이게
+    // 없으면 생성 코드가 JsonNullable/JsonNullableModule을 못 찾아 컴파일 실패.
+    api 'org.openapitools:jackson-databind-nullable:0.2.6'
     api 'com.google.code.findbugs:jsr305:3.0.2'
     compileOnly 'jakarta.annotation:jakarta.annotation-api:2.1.1'
 }
