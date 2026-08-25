@@ -288,38 +288,6 @@ def read_mcq(block_crop):
     return nums or None
 
 
-def _parse_page_json(text):
-    """VLM 응답 텍스트 → (쪽수 str|None, {문제번호: 학생답 str}). JSON 없음/깨짐은 (None, {})."""
-    if not text:
-        return None, {}
-    try:
-        data = json.loads(re.search(r"\{.*\}", text, re.S).group(0))
-    except (AttributeError, ValueError):
-        log.warning("read_page: 응답에서 JSON 파싱 실패(페이지 보류)")
-        return None, {}  # JSON 없음/깨짐 → 페이지 보류
-    page = data.get("page")
-    answers = {str(k): str(v) for k, v in (data.get("answers") or {}).items()}
-    return (str(page) if page else None), answers
-
-
-def _merge_page_reads(reads):
-    """[(쪽수, 답dict)] → 병합 (쪽수, 답dict). 여러 조각을 합칠 때 쓴다.
-
-    쪽수는 먼저 읽힌 값을 채택. 답은 표시 있는(비어있지 않은) 쪽을 우선한다 — 조각
-    경계에 걸린 문제는 두 조각에 다 잡힐 수 있는데, 잘린 쪽이 빈 값을 주더라도 온전한
-    쪽의 값을 살리기 위함이다.
-    """
-    page, merged = None, {}
-    for p, answers in reads:
-        if p and not page:
-            page = p
-        for k, v in answers.items():
-            if v.strip() and not merged.get(k, "").strip():
-                merged[k] = v          # 표시 있는 값으로 채운다(빈 값을 덮어쓴다)
-            merged.setdefault(k, v)    # 어느 조각도 표시 없으면 빈 값이라도 남긴다
-    return page, merged
-
-
 def read_page(page_img):
     """전체 페이지 이미지 → (쪽수 str|None, {문제번호: 학생답 str}). 실패는 (None, {}).
 
@@ -334,59 +302,21 @@ def read_page(page_img):
     # 페이지 전체라 출력이 read_math보다 길다(문제 수만큼). reasoning 토큰이 한도를
     # 먼저 먹으므로 여유를 더 준다.
     text = _executor().submit(_call, b64, PAGE_PROMPT, 4000).result()
-    page, answers = _parse_page_json(text)
+    if not text:
+        return None, {}
+    try:
+        data = json.loads(re.search(r"\{.*\}", text, re.S).group(0))
+    except (AttributeError, ValueError):
+        log.warning("read_page: 응답에서 JSON 파싱 실패(페이지 보류)")
+        return None, {}  # JSON 없음/깨짐 → 페이지 보류
+    page = data.get("page")
+    answers = {str(k): str(v) for k, v in (data.get("answers") or {}).items()}
     log.info("read_page: 쪽수=%s, 답 %d개 읽음", page or "?", len(answers))
-    return page, answers
-
-
-def read_page_split(page_img, slices=2, overlap=0.06):
-    """페이지를 세로로 slices등분해 각 조각을 detail=high로 읽고 병합한다.
-
-    fullpage 단일 콜은 4032²를 OpenAI가 ~1024×768로 줄여 봐서 작은 손글씨를 오독한다
-    (측정: '57'→'72'를 conf 0.95로 자신있게). 조각으로 나누면 조각당 유효해상도가 올라
-    답 픽셀이 커진다. slices<=1이면 read_page와 동일. 조각 경계에 걸린 문제를 살리려
-    위아래로 overlap만큼 겹쳐 자른다.
-
-    각 조각은 leaf _call만 전역 풀에 던진다 — read_page 자체를 풀에 제출하면 풀 안에서
-    다시 풀을 기다려 교착날 수 있다(모듈 docstring 동시성 규칙).
-    """
-    if not available():
-        return None, {}
-    h = page_img.shape[0]
-    if slices <= 1 or h < 400:  # 너무 얇으면(크롭 등) 분할 이득 없음 → 단일
-        return read_page(page_img)
-    step = h // slices
-    ov = int(step * overlap)
-    b64s = []
-    for i in range(slices):
-        y0 = max(0, i * step - ov)
-        y1 = min(h, (i + 1) * step + ov)
-        b = _encode_jpeg_b64(page_img[y0:y1])
-        if b:
-            b64s.append(b)
-    if not b64s:
-        return None, {}
-    pool = _executor()
-    futs = [pool.submit(_call, b, PAGE_PROMPT, 4000) for b in b64s]
-    page, answers = _merge_page_reads([_parse_page_json(f.result()) for f in futs])
-    log.info("read_page_split(%d): 쪽수=%s, 답 %d개 읽음", slices, page or "?", len(answers))
-    return page, answers
+    return (str(page) if page else None), answers
 
 
 def _selftest():
     import numpy as np
-
-    # 페이지 JSON 파싱 (네트워크 없이 순수 함수)
-    assert _parse_page_json('{"page":"12","answers":{"1":"2","3":""}}') == ("12", {"1": "2", "3": ""})
-    assert _parse_page_json("깨진텍스트") == (None, {})
-    assert _parse_page_json("") == (None, {})
-
-    # 조각 병합: 표시 있는 값 우선, 경계에 걸려 한쪽이 비어도 온전한 쪽을 살린다
-    page, merged = _merge_page_reads([
-        ("12", {"1": "2", "5": ""}),   # 위 조각: 5번은 잘려 빈 값
-        (None, {"5": "3", "6": "4"}),  # 아래 조각: 5번 온전, 6번 신규
-    ])
-    assert page == "12" and merged == {"1": "2", "5": "3", "6": "4"}, merged
 
     # 키 관련 환경변수를 잠시 비워서, 네트워크 없이 방어 동작을 검증
     saved = {k: os.environ.pop(k, None)
