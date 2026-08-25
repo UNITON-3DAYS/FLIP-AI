@@ -160,6 +160,8 @@ def selftest():
     assert pr2.counts() == {O: 1, X: 1, HOLD: 1}
     assert "1번" in format_page(pr2).replace(" ", "")
 
+    from flip.answers import _selftest as answers_selftest
+    answers_selftest()
     from flip.equivalence import _selftest as equivalence_selftest
     equivalence_selftest()
     from flip.handwriting import _selftest as handwriting_selftest
