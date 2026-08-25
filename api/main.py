@@ -23,8 +23,11 @@ from dotenv import load_dotenv
 
 load_dotenv()  # .env를 프로세스 환경으로 로드(uvicorn --env-file 없이도 동작). 실제 env가 우선.
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from flip import grade
 from flip import ocr, vlm
@@ -66,6 +69,24 @@ app.add_middleware(
 
 # 내부 한글 판정('보류') → 응답 Enum 매핑.
 _VERDICT = {O: Verdict.O, X: Verdict.X, HOLD: Verdict.HOLD}
+
+
+@app.exception_handler(RequestValidationError)
+async def _log_422(request: Request, exc: RequestValidationError):
+    """422가 왜 나는지 진단용 로그. 클라이언트가 실제로 보낸 헤더/바디를 그대로 찍는다.
+
+    검증 실패는 핸들러 진입 전에 터져서 '/grade 수신' 로그가 안 남는다 → 여기서
+    Content-Type과 원본 바디(길이·앞부분)를 남겨 'body=null 422'의 원인을 가른다:
+    Content-Type이 application/json이 아니거나 바디가 비었으면 그게 원인.
+    """
+    body = await request.body()
+    ct = request.headers.get("content-type")
+    cl = request.headers.get("content-length")
+    log.warning(
+        "422 %s %s | content-type=%r content-length=%s 실제바디=%dB 앞부분=%r | errors=%s",
+        request.method, request.url.path, ct, cl, len(body), body[:200], exc.errors(),
+    )
+    return JSONResponse(status_code=422, content=jsonable_encoder({"detail": exc.errors()}))
 
 
 @app.on_event("startup")
