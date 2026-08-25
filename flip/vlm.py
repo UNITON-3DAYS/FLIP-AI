@@ -61,23 +61,22 @@ MCQ_PROMPT = (
 # 쪽수와 문제별 학생 답을 한 번에 읽는다.
 # 상세 규칙형 PAGE_SYSTEM은 A/B에서 오히려 오채점↑(68 회귀·"흐릿해도 기록" 과독)이라
 # 검증된 단순 프롬프트로 되돌렸다. system 없이 유저 턴 1개(구 방식).
+# 객관식 지시는 "접촉 기준"(번호에 닿으면 선택)이 아니라 사람 판독 방식인 "표적/argmax"다:
+# 다섯을 비교해 표시 중심이 가장 얹힌 하나를 고르고, 보통 한 개(한답 prior), 꼬리 스침은 제외.
+# 접촉 기준은 저해상에서 겹침/스침 경계가 흔들려 체크 겹침 FP·복수 흔들림을 냈다(되돌리지 말 것).
 PAGE_SYSTEM = None
 PAGE_PROMPT = (
     "수학 문제집 한 페이지 사진이다. 페이지 번호와, 각 문제에서 학생이 손으로 표시/필기한 답을 읽어라.\n"
     "- 문제번호는 인쇄된 번호 그대로(예: 0046).\n"
-    "- 객관식: 마킹은 반드시 선택지 번호(①②③④⑤) 자체를 동그라미로 감싸거나 번호 위에 겹쳐 있어야 "
-    "인정한다. 번호 오른쪽 답 값·글자(예: \"27\") 위를 지나가는 획은 그 번호를 고른 게 아니므로 무시한다. "
-    "인쇄된 원문자도 제외. 여러 개면 쉼표.\n"
+    "- 객관식: 각 번호에 획이 닿았는지 따지지 마라. 다섯 선택지(①②③④⑤)를 나란히 비교해서, "
+    "학생 표시(동그라미·체크)의 중심이 가장 확실히 얹힌 번호를 골라라. 보통 한 문제엔 한 개다 — "
+    "표시가 하나면 그 하나만 낸다. 꼬리·삐침이 스치기만 한 번호나 번호 오른쪽 답 값·글자(예: \"27\") "
+    "위를 지난 획은 고른 게 아니다. 인쇄된 원문자도 제외. 선택지에 아무 표시가 없고 학생이 빈 공간에 "
+    "고른 번호를 손으로 적었으면(예: 동그라미 친 숫자) 그 숫자를 답으로 본다. 서로 독립된 표시가 둘 이상 "
+    "뚜렷할 때만 쉼표로 복수.\n"
     "- 주관식: 손글씨 값을 선형표기로(분수 a/b, 제곱근 sqrt(x), 거듭제곱 x^2).\n"
     "- 표시가 전혀 없는 문제는 빈 문자열.\n"
     'JSON만 출력: {"page":"12","answers":{"0046":"2","0047":"4"}}'
-)
-# few-shot 예시 턴의 지시문. 예시는 문항 한 개의 마킹 조각이라, 전체 JSON이 아니라
-# "고른 번호만" 답하게 한다(출력이 "2,3"·"5"처럼 짧아짐). 스쳐간 획 제외 규칙을 여기 박아,
-# 예시 이미지+정답이 그 규칙을 시연하게 한다.
-PAGE_EXAMPLE_PROMPT = (
-    "아래는 객관식 한 문항의 마킹 예시다. 학생이 동그라미·체크로 실제 고른 선택지 번호만 "
-    "답하라(복수면 쉼표). 획이 스쳐 지나가기만 한 번호는 고른 게 아니므로 제외."
 )
 
 # 읽기 거부 응답 (둘 다 None 처리 → 호출부 보류). PRINTED는 마스킹을 빠져나온
@@ -137,41 +136,6 @@ def _encode_jpeg_b64(img):
     return base64.b64encode(buf.tobytes()).decode("ascii")
 
 
-_FEWSHOT = None  # 로드 캐시 (None=아직 안 읽음, []=없음/실패)
-
-
-def _load_fewshot():
-    """few-shot 예시 [(b64, 기대출력문자열)] 로드. read_page 프롬프트 앞에 붙는다.
-
-    FLIP_FEWSHOT_DIR(기본 "fewshot")/manifest.json = [{"image","output"}, ...].
-    디렉토리·매니페스트 없으면 [](few-shot 끔). 어떤 로드 실패도 [] — 채점을 막지 않는다.
-    프리픽스가 고정이라 gemini 암시적 캐싱 대상(입력 1024토큰 넘으면 할인 적용).
-    """
-    global _FEWSHOT
-    if _FEWSHOT is not None:
-        return _FEWSHOT
-    _FEWSHOT = []
-    d = os.environ.get("FLIP_FEWSHOT_DIR", "fewshot")
-    manifest = os.path.join(d, "manifest.json") if d else ""
-    if not manifest or not os.path.exists(manifest):
-        return _FEWSHOT
-    try:
-        with open(manifest, encoding="utf-8") as f:
-            items = json.load(f)
-        for it in items:
-            img = cv2.imread(os.path.join(d, it["image"]))
-            b64 = _encode_jpeg_b64(img) if img is not None else None
-            if b64 is None:
-                log.warning("few-shot 이미지 로드 실패(건너뜀): %s", it.get("image"))
-                continue
-            _FEWSHOT.append((b64, str(it["output"])))
-        log.info("few-shot 예시 %d개 로드 (%s)", len(_FEWSHOT), d)
-    except Exception as e:  # 매니페스트 깨짐/키 누락 등 — few-shot 끄고 진행
-        log.warning("few-shot 로드 실패(무시, few-shot 끔): %s", e)
-        _FEWSHOT = []
-    return _FEWSHOT
-
-
 # ── provider별 REST 호출 ─────────────────────────────────────────────────
 
 def _extract_responses_text(data):
@@ -184,8 +148,7 @@ def _extract_responses_text(data):
     return None
 
 
-def _call_openai(b64, key, model, prompt, max_out=REASONING_MAX_TOKENS, system=None,
-                 examples=None):
+def _call_openai(b64, key, model, prompt, max_out=REASONING_MAX_TOKENS, system=None):
     """OpenAI Responses API 주경로 (GPT-5 세대 권장 방식).
 
     reasoning effort 기본 low — 크롭/페이지 읽기는 단순 작업이라 low가 빠르고 싸다.
@@ -199,17 +162,10 @@ def _call_openai(b64, key, model, prompt, max_out=REASONING_MAX_TOKENS, system=N
     base = os.environ.get("FLIP_VLM_BASE_URL", "https://api.openai.com/v1").rstrip("/")
     headers = {"Authorization": f"Bearer {key}"}
 
-    def _user(text, img_b64):
-        return {"role": "user", "content": [
-            {"type": "input_text", "text": text},
-            {"type": "input_image",
-             "image_url": f"data:image/jpeg;base64,{img_b64}", "detail": DETAIL}]}
-    inp = []
-    for ex_b64, ex_out in (examples or []):  # few-shot 턴 선주입
-        inp.append(_user(PAGE_EXAMPLE_PROMPT, ex_b64))
-        inp.append({"role": "assistant",
-                    "content": [{"type": "output_text", "text": ex_out}]})
-    inp.append(_user(prompt, b64))
+    inp = [{"role": "user", "content": [
+        {"type": "input_text", "text": prompt},
+        {"type": "input_image",
+         "image_url": f"data:image/jpeg;base64,{b64}", "detail": DETAIL}]}]
     payload = {
         "model": model,
         "max_output_tokens": max_out,  # 사고 토큰이 한도를 먼저 먹는다
@@ -226,16 +182,11 @@ def _call_openai(b64, key, model, prompt, max_out=REASONING_MAX_TOKENS, system=N
         return _extract_responses_text(r.json())
 
     # 폴백: Responses를 모르는 구모델/구계정 → Chat Completions (구파라미터)
-    def _luser(text, img_b64):
-        return {"role": "user", "content": [
-            {"type": "text", "text": text},
-            {"type": "image_url",
-             "image_url": {"url": f"data:image/jpeg;base64,{img_b64}", "detail": DETAIL}}]}
     lmsgs = [{"role": "system", "content": system}] if system else []
-    for ex_b64, ex_out in (examples or []):
-        lmsgs.append(_luser(PAGE_EXAMPLE_PROMPT, ex_b64))
-        lmsgs.append({"role": "assistant", "content": ex_out})
-    lmsgs.append(_luser(prompt, b64))
+    lmsgs.append({"role": "user", "content": [
+        {"type": "text", "text": prompt},
+        {"type": "image_url",
+         "image_url": {"url": f"data:image/jpeg;base64,{b64}", "detail": DETAIL}}]})
     legacy = {"model": model, "max_tokens": max(MAX_TOKENS, max_out), "messages": lmsgs}
     r = requests.post(f"{base}/chat/completions",
                       headers=headers, json=legacy, timeout=TIMEOUT)
@@ -243,8 +194,7 @@ def _call_openai(b64, key, model, prompt, max_out=REASONING_MAX_TOKENS, system=N
     return r.json()["choices"][0]["message"]["content"]
 
 
-def _call_gemini(b64, key, model, prompt, max_out=REASONING_MAX_TOKENS, system=None,
-                 examples=None):
+def _call_gemini(b64, key, model, prompt, max_out=REASONING_MAX_TOKENS, system=None):
     # maxOutputTokens에 thinking 토큰도 포함되므로(2.5 계열) max_out 여유를 그대로 쓴다.
     gen = {"maxOutputTokens": max_out}
     # 사고 제한 (기본 0 = 끔): 6페이지 A/B에서 사고를 꺼도 판독 정확도 동일, 속도는
@@ -256,15 +206,16 @@ def _call_gemini(b64, key, model, prompt, max_out=REASONING_MAX_TOKENS, system=N
         gen["thinkingConfig"] = ({"thinkingBudget": int(thinking)}
                                  if thinking.lstrip("-").isdigit()
                                  else {"thinkingLevel": thinking})
-    def _user(text, img_b64):
-        return {"role": "user", "parts": [
-            {"text": text},
-            {"inline_data": {"mime_type": "image/jpeg", "data": img_b64}}]}
-    contents = []
-    for ex_b64, ex_out in (examples or []):  # few-shot: (예시이미지, 기대출력) 턴 선주입
-        contents.append(_user(PAGE_EXAMPLE_PROMPT, ex_b64))
-        contents.append({"role": "model", "parts": [{"text": ex_out}]})
-    contents.append(_user(prompt, b64))
+    # 이미지 해상도. gemini는 기본적으로 페이지를 저해상(768px 한 타일, ~272토큰)으로
+    # 다운샘플해 동그라미·체크를 뭉개 오독한다(실측 11장 O21/X38). HIGH면 ~3368토큰으로
+    # 올라가 마킹이 읽힌다(O43/X24) — 그래서 코드 default를 HIGH로 둬 prod secret 없이도
+    # 적용된다. 지원 안 하는 모델이 400을 내면 FLIP_VLM_MEDIA_RES=(빈 값)으로 끌 수 있다.
+    mres = os.environ.get("FLIP_VLM_MEDIA_RES", "MEDIA_RESOLUTION_HIGH").strip()
+    if mres:
+        gen["mediaResolution"] = mres
+    contents = [{"role": "user", "parts": [
+        {"text": prompt},
+        {"inline_data": {"mime_type": "image/jpeg", "data": b64}}]}]
     body = {"contents": contents, "generationConfig": gen}
     if system:
         body["systemInstruction"] = {"parts": [{"text": system}]}
@@ -281,18 +232,11 @@ def _call_gemini(b64, key, model, prompt, max_out=REASONING_MAX_TOKENS, system=N
     return data["candidates"][0]["content"]["parts"][0]["text"]
 
 
-def _call_anthropic(b64, key, model, prompt, max_out=REASONING_MAX_TOKENS, system=None,
-                    examples=None):
-    def _user(text, img_b64):
-        return {"role": "user", "content": [
-            {"type": "image", "source": {
-                "type": "base64", "media_type": "image/jpeg", "data": img_b64}},
-            {"type": "text", "text": text}]}
-    msgs = []
-    for ex_b64, ex_out in (examples or []):  # few-shot 턴 선주입
-        msgs.append(_user(PAGE_EXAMPLE_PROMPT, ex_b64))
-        msgs.append({"role": "assistant", "content": ex_out})
-    msgs.append(_user(prompt, b64))
+def _call_anthropic(b64, key, model, prompt, max_out=REASONING_MAX_TOKENS, system=None):
+    msgs = [{"role": "user", "content": [
+        {"type": "image", "source": {
+            "type": "base64", "media_type": "image/jpeg", "data": b64}},
+        {"type": "text", "text": prompt}]}]
     r = requests.post(
         "https://api.anthropic.com/v1/messages",
         headers={
@@ -320,7 +264,7 @@ def _call_anthropic(b64, key, model, prompt, max_out=REASONING_MAX_TOKENS, syste
 _CALLS = {"openai": _call_openai, "gemini": _call_gemini, "anthropic": _call_anthropic}
 
 
-def _call(b64, prompt=PROMPT, max_out=REASONING_MAX_TOKENS, system=None, examples=None):
+def _call(b64, prompt=PROMPT, max_out=REASONING_MAX_TOKENS, system=None):
     """1회 호출 → 정리된 응답 문자열. 어떤 실패든 None (실패 사유는 로그로 남긴다)."""
     key = os.environ.get("FLIP_VLM_API_KEY")
     provider, model = _provider(), _model()
@@ -333,7 +277,7 @@ def _call(b64, prompt=PROMPT, max_out=REASONING_MAX_TOKENS, system=None, example
     text = None
     for attempt in (1, 2):  # 일시 장애(5xx/타임아웃)는 1회 재시도 — 페이지 통보류 방지
         try:
-            text = call(b64, key, model, prompt, max_out, system, examples)
+            text = call(b64, key, model, prompt, max_out, system)
             break
         except Exception as e:
             log.warning("VLM %s/%s 호출 실패(%d차, %.1fs): %s", provider, model,
@@ -456,8 +400,7 @@ def read_page(page_img):
         n_votes = 1
     # 페이지 전체라 출력이 read_math보다 길다(문제 수만큼). gemini는 사고 토큰도
     # 이 한도를 나눠 쓰므로 넉넉히(동적 사고가 수천 토큰을 먼저 먹은 잘림 실측).
-    ex = _load_fewshot()  # 프롬프트 앞 예시 턴 (없으면 [])
-    futs = [_executor().submit(_call, b64, PAGE_PROMPT, 12000, PAGE_SYSTEM, ex)
+    futs = [_executor().submit(_call, b64, PAGE_PROMPT, 12000, PAGE_SYSTEM)
             for _ in range(n_votes)]
     reads = [r for r in (_parse_page(f.result()) for f in futs) if r is not None]
     if not reads:
