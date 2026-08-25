@@ -15,3 +15,7 @@ pypdfium2
 # 채점 서버 (api/). Spring이 base64 사진을 POST /grade로 보내 동기 채점.
 fastapi
 uvicorn[standard]
+
+# 정답 소스 MySQL 백엔드 (flip/answers.py). Backend와 같은 GCP MySQL을 읽는다.
+# 순수 파이썬이라 시스템 빌드 의존이 없다(mysqlclient 대비 슬림).
+PyMySQL
