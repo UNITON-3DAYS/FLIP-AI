@@ -17,9 +17,14 @@ import binascii
 import logging
 import os
 
-from fastapi import FastAPI, HTTPException
+from dotenv import load_dotenv
 
-import grade
+load_dotenv()  # .env를 프로세스 환경으로 로드(uvicorn --env-file 없이도 동작). 실제 env가 우선.
+
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+
+from flip import grade
 from flip import ocr, vlm
 from flip.answers import get_source
 from flip.preprocess import decode_image, preprocess_array
@@ -39,6 +44,15 @@ app = FastAPI(
     title="FLIP 채점 서버",
     version=API_VERSION,
     description="페이지 사진 1장 → 문제별 O/X/보류 채점 결과.",
+)
+
+# 로컬 Spring(포트 무관)에서 브라우저 경유 호출 허용. 프로덕션 오리진이 생기면
+# allow_origin_regex를 그 도메인으로 좁힌다.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origin_regex=r"http://(localhost|127\.0\.0\.1)(:\d+)?",
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # 내부 한글 판정('보류') → 응답 Enum 매핑.

@@ -20,7 +20,7 @@ jobs:
       - name: 최소 의존 설치
         run: pip install numpy opencv-python-headless pillow sympy requests
       - name: selftest
-        run: python grade.py --selftest
+        run: python -m flip.grade --selftest
 
   build:
     name: docker image

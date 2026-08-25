@@ -47,7 +47,7 @@ def capture_check(image_path):
 class ScanSession:
     """페이지를 순서대로 투입받아 백그라운드에서 병렬 채점한다.
 
-    grade_fn: (image_path) -> PageResult  (grade.grade_page를 db 바인딩해 넘긴다)
+    grade_fn: (image_path) -> PageResult  (flip.grade.grade_page를 db 바인딩해 넘긴다)
     on_result: 페이지 결과가 나올 때마다 호출 (완료 순서, 투입 순서 아님)
     """
 

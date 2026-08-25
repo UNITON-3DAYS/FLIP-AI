@@ -55,7 +55,12 @@ def run_ocr(gray_img, lang="korean"):
         os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
         _engine = PaddleOCR(
             lang=lang,
-            use_textline_orientation=True,
+            # 앵커(쪽수·문제번호)만 필요하므로 가벼운 mobile det로 충분.
+            # 실측: server_det+ori 16.4s → mobile_det+no-ori 10.7s (앵커 7/7 유지).
+            text_detection_model_name="PP-OCRv5_mobile_det",
+            # preprocess가 이미 페이지를 정면화 → 라인별 방향분류기는 낭비. 문제집
+            # 본문은 수평이라 꺼도 앵커 검출 동일. 눕은 텍스트가 나오면 True로.
+            use_textline_orientation=False,
             # 입력은 preprocess가 정면화한다. 문서 방향/왜곡 모델은 CPU에서 페이지당
             # 수십 초를 먹는 순수 낭비. 90도 눕은 사진이 들어오면 다시 켤 것.
             use_doc_orientation_classify=False,

@@ -1,8 +1,8 @@
 """FLIP 문제집 페이지 사진 자동 채점 CLI.
 
-  python grade.py --image samples/p12.jpg --db samples/db.json
-  python grade.py --batch samples/ --db samples/db.json
-  python grade.py --selftest        # 이미지·OCR·API 없이 스키마/집계 로직 검증
+  python -m flip.grade --image samples/p12.jpg --db samples/db.json
+  python -m flip.grade --batch samples/ --db samples/db.json
+  python -m flip.grade --selftest        # 이미지·OCR·API 없이 스키마/집계 로직 검증
 
 파이프라인 (부모 이슈 참고):
   보정 -> OCR -> 쪽수 -> 단/anchor/블록 -> 유형 분기 -> 객관식|주관식 -> SymPy -> O/X/보류
@@ -10,6 +10,8 @@
 """
 import argparse
 import concurrent.futures
+import os
+import re
 import sys
 from pathlib import Path
 
@@ -22,7 +24,27 @@ from flip.results import HOLD, O, PageResult, QuestionResult, X, format_page
 IMAGE_EXTS = {".jpg", ".jpeg", ".png"}
 
 
-# ── stub 단계 (후속 티켓이 교체) ─────────────────────────────────────────
+# ── 판정 로직 (블록/전체페이지 그레이더가 공유) ──────────────────────────
+
+def _verdict_mcq(question, picked):
+    """마킹 번호 리스트 → O/X. 정답 집합과 순서 무관 일치면 O."""
+    answer = question.answer if isinstance(question.answer, list) else [question.answer]
+    ok = set(picked) == {int(a) for a in answer}
+    return QuestionResult(question.question_no, O if ok else X,
+                          student_answer=",".join(map(str, picked)))
+
+
+def _verdict_subjective(question, student):
+    """손글씨 답 문자열 → O/X/보류(파싱 실패). SymPy 동치 비교."""
+    verdict = equivalence.equivalent(student, question.answer)
+    if verdict is None:
+        return QuestionResult(question.question_no, HOLD,
+                              student_answer=student, detail="파싱 실패")
+    return QuestionResult(question.question_no, O if verdict else X,
+                          student_answer=student)
+
+
+# ── 블록 그레이더: OCR로 블록 절단 → 문제별 크롭을 VLM에 판독 ────────────
 
 def grade_mcq(color, gray, boxes, block, question):
     """객관식: 문제 블록을 통째로 VLM에 넘겨 동그라미 친 번호를 읽는다.
@@ -36,10 +58,7 @@ def grade_mcq(color, gray, boxes, block, question):
     picked = vlm.read_mcq(color[y1:y2, x1:x2])
     if picked is None:
         return QuestionResult(question.question_no, HOLD, detail="마킹 인식 불확실")
-    answer = question.answer if isinstance(question.answer, list) else [question.answer]
-    ok = set(picked) == {int(a) for a in answer}
-    return QuestionResult(question.question_no, O if ok else X,
-                          student_answer=",".join(map(str, picked)))
+    return _verdict_mcq(question, picked)
 
 
 def grade_subjective(color, gray, boxes, block, question):
@@ -55,12 +74,7 @@ def grade_subjective(color, gray, boxes, block, question):
     student = vlm.read_math(color[y1:y2, x1:x2])
     if student is None:
         return QuestionResult(question.question_no, HOLD, detail="인식 불확실")
-    verdict = equivalence.equivalent(student, question.answer)
-    if verdict is None:
-        return QuestionResult(question.question_no, HOLD,
-                              student_answer=student, detail="파싱 실패")
-    return QuestionResult(question.question_no, O if verdict else X,
-                          student_answer=student)
+    return _verdict_subjective(question, student)
 
 
 # ── 파이프라인 조립 ──────────────────────────────────────────────────────
@@ -73,12 +87,44 @@ def grade_page(image_path, db, page_hint=None, debug=False):
 
 
 def grade_prepared(color, gray, db, page_hint=None, label="", debug=False):
-    """보정 끝난 (컬러, 그레이) 이미지 -> PageResult.
+    """보정 끝난 (컬러, 그레이) 이미지 -> PageResult. 서버(api)·CLI 공용 진입점.
 
-    파일 경로가 아니라 이미 디코드·보정된 이미지에서 시작하는 진입점. 서버(api)가
-    base64로 받은 이미지를 임시 파일 없이 그대로 채점할 때 쓴다. grade_page는
-    파일을 읽어 이 함수로 넘긴다.
+    두 그레이더를 FLIP_GRADER로 갈아끼운다:
+      - "blocks"(기본): OCR로 쪽수·문제 블록을 절단해 문제별 크롭을 VLM에 판독.
+      - "fullpage": OCR 없이 페이지 전체를 VLM 1콜로 판독(RAM 0·비용↓, 쪽수도 VLM이 읽음).
+    반환 PageResult 계약은 동일해서 소비자(api)는 어느 쪽인지 몰라도 된다.
     """
+    if os.environ.get("FLIP_GRADER", "blocks") == "fullpage":
+        return _grade_fullpage(color, db, page_hint, label)
+    return _grade_blocks(color, gray, db, page_hint, label, debug)
+
+
+def _grade_fullpage(color, db, page_hint, label):
+    """페이지 전체를 VLM 1콜로 채점 (OCR·블록절단 없음)."""
+    if not vlm.available():
+        return PageResult(image=label, hold_reason="VLM API 키 없음")
+    page_no, answers = vlm.read_page(color)
+    page_no = page_hint or page_no
+    if not page_no or page_no not in db.valid_pages():
+        # 쪽수를 못 읽으면 문제 목록을 모른다 → 페이지 전체 보류.
+        return PageResult(image=label, page_no=page_no or "",
+                          hold_reason="쪽수 인식 실패")
+    results = []
+    for q in db.questions_for(page_no) or []:
+        raw = (answers.get(q.question_no) or "").strip()
+        if not raw:  # 표시/필기 없음 → 보류(오답 처리 금지)
+            results.append(QuestionResult(q.question_no, HOLD, detail="인식 불확실"))
+        elif q.qtype == MULTIPLE_CHOICE:
+            picked = sorted({int(n) for n in re.findall(r"[1-9]", raw)})
+            results.append(_verdict_mcq(q, picked) if picked
+                           else QuestionResult(q.question_no, HOLD, detail="마킹 인식 불확실"))
+        else:
+            results.append(_verdict_subjective(q, raw))
+    return PageResult(image=label, page_no=page_no, results=results)
+
+
+def _grade_blocks(color, gray, db, page_hint=None, label="", debug=False):
+    """OCR로 블록을 절단해 문제별 크롭을 VLM에 판독하는 기존 그레이더."""
     boxes = []
     if ocr.available():
         boxes = ocr.run_ocr(gray)

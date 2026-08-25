@@ -14,16 +14,16 @@
   고해상 타일링으로 입력토큰 30배라 금지.
 - 인쇄 마커 CV(`flip/mcq.py`)와 손글씨 격리(`handwriting.extract_crops`)는 실사진에서
   실패해 현재 파이프라인에서 **쓰지 않는다**(selftest용으로만 잔존). YOLO 실험 잔재
-  (`infer.py`/`synth_data.py`)도 마찬가지 — `grade.py`는 위 VLM 경로만 탄다.
+  (`infer.py`/`synth_data.py`)도 마찬가지 — `flip/grade.py`는 위 VLM 경로만 탄다.
 - Linear: Team `AKR` (akran) / Project `FLIP-AI`
 - 브랜치 모델: main-only
 - QA 방법: 로컬 실행 (`--selftest` 및 실제 이미지 채점)
 
 ## 검사 명령
 
-- 집중 테스트: `python grade.py --selftest` — 이미지·OCR·API 키 없이
+- 집중 테스트: `python -m flip.grade --selftest` — 이미지·OCR·API 키 없이
   스키마/채점/동치/구조 로직 검증
-- 실제 이미지: `python grade.py --image <사진> --db db.ssen_2-1.json`
+- 실제 이미지: `python -m flip.grade --image <사진> --db db.ssen_2-1.json`
   (OCR은 PaddleOCR 설치, VLM은 `FLIP_VLM_API_KEY` 필요)
 - lint/typecheck: 없음
 - 빌드: 없음 (스크립트 실행형)

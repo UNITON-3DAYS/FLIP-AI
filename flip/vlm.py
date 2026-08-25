@@ -13,12 +13,13 @@
 동시성:
 - 모든 API 왕복은 이 모듈의 전역 공유 풀(_executor)을 거친다. 동시 호출 수를
   FLIP_VLM_CONCURRENCY 하나로 묶어 rate limit을 넘지 않게 한다. 페이지 병렬
-  (session.py)과 문제 병렬(grade.py)은 이 풀의 슬롯을 두고 경쟁할 뿐이다.
+  (session.py)과 문제 병렬(flip/grade.py)은 이 풀의 슬롯을 두고 경쟁할 뿐이다.
 - 풀에는 leaf HTTP 호출(_call)만 제출한다. read_math/read_mcq 자체를 풀에
   제출하면 안 된다 — 풀 안에서 다시 풀을 기다려 교착이 날 수 있다.
 """
 import base64
 import concurrent.futures
+import json
 import os
 import re
 import threading
@@ -46,8 +47,21 @@ PROMPT = (
 
 # 객관식: 문제 블록을 통째로 넘겨 학생이 친 마킹 번호만 받는다 (인쇄 마커 CV 대체).
 MCQ_PROMPT = (
-    "객관식 문제 이미지다. 학생이 손으로 동그라미(또는 체크) 표시한 선택지 번호만 "
-    "출력해라. 여러 개면 쉼표로 구분 (예: 2,4). 표시가 없으면 NONE. 숫자만, 다른 말 금지."
+    "객관식 문제 이미지다. 학생이 손으로 그 번호를 동그라미로 감싸거나 번호 위에 직접 "
+    "겹쳐 표시한 선택지만 출력해라. 획이 근처를 스쳐 지나가기만 한 번호는 제외한다. "
+    "여러 개면 쉼표로 구분 (예: 2,4). 표시가 없으면 NONE. 숫자만, 다른 말 금지."
+)
+
+# 전체페이지 1콜 채점(FLIP_GRADER=fullpage)용. OCR·블록절단 없이 페이지 전체를 넘겨
+# 쪽수와 문제별 학생 답을 한 번에 읽는다. 실측: 블록 방식과 동률(7/7)에 토큰 ~1/5.
+PAGE_PROMPT = (
+    "수학 문제집 한 페이지 사진이다. 페이지 번호와, 각 문제에서 학생이 손으로 표시/필기한 답을 읽어라.\n"
+    "- 문제번호는 인쇄된 번호 그대로(예: 0046).\n"
+    "- 객관식: 학생이 펜으로 동그라미로 감싸거나 번호 위에 겹쳐 표시한 선택지 번호. 획이 스쳐 지나간 "
+    "것·인쇄된 원문자는 제외. 여러 개면 쉼표.\n"
+    "- 주관식: 손글씨 값을 선형표기로(분수 a/b, 제곱근 sqrt(x), 거듭제곱 x^2).\n"
+    "- 표시가 전혀 없는 문제는 빈 문자열.\n"
+    'JSON만 출력: {"page":"12","answers":{"0046":"2","0047":"4"}}'
 )
 
 # 읽기 거부 응답 (둘 다 None 처리 → 호출부 보류). PRINTED는 마스킹을 빠져나온
@@ -118,7 +132,7 @@ def _extract_responses_text(data):
     return None
 
 
-def _call_openai(b64, key, model, prompt):
+def _call_openai(b64, key, model, prompt, max_out=REASONING_MAX_TOKENS):
     """OpenAI Responses API 주경로 (GPT-5 세대 권장 방식).
 
     reasoning effort는 FLIP_VLM_REASONING 설정 시에만 보낸다 — 크롭 읽기는
@@ -128,7 +142,7 @@ def _call_openai(b64, key, model, prompt):
     headers = {"Authorization": f"Bearer {key}"}
     payload = {
         "model": model,
-        "max_output_tokens": REASONING_MAX_TOKENS,  # 사고 토큰이 한도를 먼저 먹는다
+        "max_output_tokens": max_out,  # 사고 토큰이 한도를 먼저 먹는다
         "input": [{"role": "user", "content": [
             {"type": "input_text", "text": prompt},
             {"type": "input_image",
@@ -144,7 +158,7 @@ def _call_openai(b64, key, model, prompt):
         return _extract_responses_text(r.json())
 
     # 폴백: Responses를 모르는 구모델/구계정 → Chat Completions (구파라미터)
-    legacy = {"model": model, "max_tokens": MAX_TOKENS,
+    legacy = {"model": model, "max_tokens": max(MAX_TOKENS, max_out),
               "messages": [{"role": "user", "content": [
                   {"type": "text", "text": prompt},
                   {"type": "image_url",
@@ -156,7 +170,7 @@ def _call_openai(b64, key, model, prompt):
     return r.json()["choices"][0]["message"]["content"]
 
 
-def _call_gemini(b64, key, model, prompt):
+def _call_gemini(b64, key, model, prompt, max_out=REASONING_MAX_TOKENS):
     r = requests.post(
         f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
         params={"key": key},
@@ -169,7 +183,7 @@ def _call_gemini(b64, key, model, prompt):
     return r.json()["candidates"][0]["content"]["parts"][0]["text"]
 
 
-def _call_anthropic(b64, key, model, prompt):
+def _call_anthropic(b64, key, model, prompt, max_out=REASONING_MAX_TOKENS):
     r = requests.post(
         "https://api.anthropic.com/v1/messages",
         headers={
@@ -179,7 +193,7 @@ def _call_anthropic(b64, key, model, prompt):
         },
         json={
             "model": model,
-            "max_tokens": MAX_TOKENS,
+            "max_tokens": max(MAX_TOKENS, max_out),
             "messages": [{"role": "user", "content": [
                 {"type": "image", "source": {
                     "type": "base64", "media_type": "image/jpeg", "data": b64}},
@@ -200,14 +214,14 @@ def _call_anthropic(b64, key, model, prompt):
 _CALLS = {"openai": _call_openai, "gemini": _call_gemini, "anthropic": _call_anthropic}
 
 
-def _call(b64, prompt=PROMPT):
+def _call(b64, prompt=PROMPT, max_out=REASONING_MAX_TOKENS):
     """1회 호출 → 정리된 응답 문자열. 어떤 실패든 None."""
     key = os.environ.get("FLIP_VLM_API_KEY")
     call = _CALLS.get(_provider())
     if not key or call is None:
         return None
     try:
-        text = call(b64, key, _model(), prompt)
+        text = call(b64, key, _model(), prompt, max_out)
     except Exception:
         return None  # 네트워크 오류/타임아웃/응답 형식 불일치 전부 보류로
     if not text:
@@ -256,6 +270,31 @@ def read_mcq(block_crop):
         return None  # 인식 실패/무마킹 → 호출부가 보류
     nums = sorted({int(n) for n in re.findall(r"[1-9]", text)})
     return nums or None
+
+
+def read_page(page_img):
+    """전체 페이지 이미지 → (쪽수 str|None, {문제번호: 학생답 str}). 실패는 (None, {}).
+
+    OCR·블록절단 없이 페이지 전체를 한 번에 읽는 fullpage 그레이더용. 크래시 금지
+    계약은 read_math/read_mcq와 동일 — 키 없음/타임아웃/JSON 깨짐은 전부 (None, {}).
+    """
+    if not available():
+        return None, {}
+    b64 = _encode_jpeg_b64(page_img)
+    if b64 is None:
+        return None, {}
+    # 페이지 전체라 출력이 read_math보다 길다(문제 수만큼). reasoning 토큰이 한도를
+    # 먼저 먹으므로 여유를 더 준다.
+    text = _executor().submit(_call, b64, PAGE_PROMPT, 4000).result()
+    if not text:
+        return None, {}
+    try:
+        data = json.loads(re.search(r"\{.*\}", text, re.S).group(0))
+    except (AttributeError, ValueError):
+        return None, {}  # JSON 없음/깨짐 → 페이지 보류
+    page = data.get("page")
+    answers = {str(k): str(v) for k, v in (data.get("answers") or {}).items()}
+    return (str(page) if page else None), answers
 
 
 def _selftest():

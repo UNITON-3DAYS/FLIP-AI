@@ -27,3 +27,8 @@ synth_*.png
 samples/
 *.pdf
 db.ssen*.json
+answer/*
+answer
+
+
+request*
