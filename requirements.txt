@@ -11,3 +11,7 @@ paddleocr
 
 # 문제집 PDF -> 페이지 이미지 렌더링 (샘플 준비용)
 pypdfium2
+
+# 채점 서버 (api/). Spring이 base64 사진을 POST /grade로 보내 동기 채점.
+fastapi
+uvicorn[standard]

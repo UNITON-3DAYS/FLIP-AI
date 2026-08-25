@@ -66,9 +66,19 @@ def grade_subjective(color, gray, boxes, block, question):
 # ── 파이프라인 조립 ──────────────────────────────────────────────────────
 
 def grade_page(image_path, db, page_hint=None, debug=False):
-    """페이지 사진 1장 -> PageResult."""
+    """페이지 사진 1장(파일 경로) -> PageResult."""
     color, gray = preprocess(image_path)
+    return grade_prepared(color, gray, db, page_hint=page_hint,
+                          label=str(image_path), debug=debug)
 
+
+def grade_prepared(color, gray, db, page_hint=None, label="", debug=False):
+    """보정 끝난 (컬러, 그레이) 이미지 -> PageResult.
+
+    파일 경로가 아니라 이미 디코드·보정된 이미지에서 시작하는 진입점. 서버(api)가
+    base64로 받은 이미지를 임시 파일 없이 그대로 채점할 때 쓴다. grade_page는
+    파일을 읽어 이 함수로 넘긴다.
+    """
     boxes = []
     if ocr.available():
         boxes = ocr.run_ocr(gray)
@@ -78,11 +88,11 @@ def grade_page(image_path, db, page_hint=None, debug=False):
     questions = db.questions_for(page_no) or []
 
     if debug and blocks:
-        out = Path(str(image_path)).with_suffix("") .name
+        out = Path(label or "page").with_suffix("").name
         structure.draw_debug(color, blocks, f"pred_blocks_{out}.png")
 
     if hold:
-        return PageResult(image=str(image_path), page_no=page_no,
+        return PageResult(image=label, page_no=page_no,
                           results=[QuestionResult(q.question_no, HOLD) for q in questions],
                           hold_reason=hold)
 
@@ -108,7 +118,7 @@ def grade_page(image_path, db, page_hint=None, debug=False):
         with concurrent.futures.ThreadPoolExecutor(
                 max_workers=len(questions), thread_name_prefix="q") as ex:
             results = list(ex.map(grade_one, questions))
-    return PageResult(image=str(image_path), page_no=page_no, results=results)
+    return PageResult(image=label, page_no=page_no, results=results)
 
 
 def run_batch(folder, db, debug=False):
