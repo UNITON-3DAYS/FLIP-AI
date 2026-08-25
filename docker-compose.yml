@@ -19,3 +19,9 @@ services:
       # 호스트의 정답 디렉터리(기본 ./answers)를 읽기전용으로 마운트.
       - ${FLIP_ANSWER_HOST_DIR:-./answers}:/answers:ro
     restart: unless-stopped
+    networks:
+      - flip-net
+
+networks:
+  flip-net:
+    external: true
