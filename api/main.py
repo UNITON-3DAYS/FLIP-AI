@@ -4,9 +4,10 @@ Spring이 base64 페이지 사진과 교재 이름(name)을 POST /grade로 보�
 O/X/보류 채점 결과를 같은 요청의 응답으로 돌려준다.
 
 핵심 계약:
-- 페이지 번호는 받지 않는다. 정답 DB 전체를 로드해 valid_pages를 얻고, OCR로
-  쪽수를 식별한다(DB 로드 → OCR 쪽수 → 채점).
-- track=workbook만 구현. exam은 값만 받고 501(트랙 2에서 구현).
+- 페이지 번호는 받지 않는다. 정답 DB 전체를 로드해 valid_pages를 얻고, 쪽수는
+  파이프라인이 식별한다(DB 로드 → 쪽수 식별 → 채점).
+- track=workbook·exam 모두 채점. 둘 다 name으로 정답 DB를 찾아 같은 파이프라인
+  (grade_prepared)을 탄다 — fullpage 판독이 트랙 무관이라 트랙별 분기가 없다.
 - 채점 실패는 500이 아니라 보류로 흡수한다(VLM 키 없음/OCR 미설치/인식 실패).
   없는 교재는 404, 깨진 base64/이미지는 400.
 
@@ -38,7 +39,7 @@ log = logging.getLogger("flip.api")
 
 # OpenAPI info.version. 계약이 바뀌면 올린다 — Java SDK(AKR-20)의 패키지 버전이
 # 여기서 파생되므로, 이 값을 안 올리면 소비자가 변경을 인지하지 못한다.
-API_VERSION = "0.1.0"
+API_VERSION = "0.2.0"  # 0.2.0: exam 트랙 채점 개시(구 501 제거)
 
 app = FastAPI(
     title="FLIP 채점 서버",
@@ -109,11 +110,9 @@ def health():
 @app.post("/grade", response_model=GradeResponse)
 def grade_endpoint(req: GradeRequest):
     """페이지 사진 1장을 동기로 채점. 블로킹 파이프라인이라 FastAPI가 스레드풀에서 돈다."""
-    if req.track is not Track.exam:
-        pass  # workbook 경로
-    else:
-        # 자체 시험지 트랙은 앞단(마커+고정좌표)이 아직 없다 → 명시적 미구현.
-        raise HTTPException(status_code=501, detail="exam 트랙은 아직 미구현 (트랙 2)")
+    # workbook·exam 모두 같은 경로: 이름으로 정답 DB를 찾아 fullpage VLM 1콜로 채점한다.
+    # (구 blocks 시대엔 exam이 마커+고정좌표 앞단을 요구해 501이었으나, fullpage는
+    # 트랙 무관하게 페이지 전체를 읽으므로 트랙 분기가 필요 없다.)
 
     # 1) base64 → 이미지 바이트 → BGR
     try:

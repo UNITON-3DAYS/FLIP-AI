@@ -3,7 +3,7 @@
   "info": {
     "title": "FLIP 채점 서버",
     "description": "페이지 사진 1장 → 문제별 O/X/보류 채점 결과.",
-    "version": "0.1.0"
+    "version": "0.2.0"
   },
   "paths": {
     "/health": {

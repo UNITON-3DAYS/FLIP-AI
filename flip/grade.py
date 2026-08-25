@@ -99,6 +99,11 @@ def grade_prepared(color, gray, db, page_hint=None, label="", debug=False):
     return _grade_blocks(color, gray, db, page_hint, label, debug)
 
 
+def _qkey(k):
+    """문제번호 키 정규화: 순수 숫자면 앞자리 0 제거 ("0021"→"21"). "7-1"·"0"은 유지."""
+    return re.sub(r"^0+(\d)", r"\1", str(k))
+
+
 def _grade_fullpage(color, db, page_hint, label):
     """페이지 전체를 VLM 1콜로 채점 (OCR·블록절단 없음)."""
     if not vlm.available():
@@ -109,9 +114,12 @@ def _grade_fullpage(color, db, page_hint, label):
         # 쪽수를 못 읽으면 문제 목록을 모른다 → 페이지 전체 보류.
         return PageResult(image=label, page_no=page_no or "",
                           hold_reason="쪽수 인식 실패")
+    # VLM은 문제번호를 프롬프트 예시("0046")를 따라 0패딩하기도 한다("21"→"0021").
+    # db 키 포맷과 안 맞으면 전부 미매칭되므로, 조회 전에 양쪽 번호를 정규화한다.
+    answers = {_qkey(k): v for k, v in answers.items()}
     results = []
     for q in db.questions_for(page_no) or []:
-        raw = (answers.get(q.question_no) or "").strip()
+        raw = (answers.get(_qkey(q.question_no)) or "").strip()
         if not raw:  # 표시/필기 없음 → 보류(오답 처리 금지)
             results.append(QuestionResult(q.question_no, HOLD, detail="인식 불확실"))
         elif q.qtype == MULTIPLE_CHOICE:
@@ -215,6 +223,10 @@ def selftest():
         QuestionResult("1", O), QuestionResult("2", X), QuestionResult("7-1", HOLD)])
     assert pr2.counts() == {O: 1, X: 1, HOLD: 1}
     assert "1번" in format_page(pr2).replace(" ", "")
+
+    # 문제번호 정규화: VLM이 0패딩("0021")해도 db 키("21")와 매칭돼야 한다.
+    assert _qkey("0021") == "21" and _qkey("21") == "21"
+    assert _qkey("0") == "0" and _qkey("7-1") == "7-1"
 
     from flip.answers import _selftest as answers_selftest
     answers_selftest()
