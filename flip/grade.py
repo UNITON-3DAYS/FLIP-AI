@@ -104,19 +104,36 @@ def _qkey(k):
     return re.sub(r"^0+(\d)", r"\1", str(k))
 
 
+def _infer_page(db, answers):
+    """읽힌 문제번호가 가장 많이 속한 db 페이지. 매칭 0이면 None.
+
+    VLM이 말하는 쪽수는 footer를 못 보면 프롬프트 예시("12")를 베껴 환각한다
+    (luna·gemini·qwen 공통 실측). 반면 인쇄 문제번호는 안정적으로 읽히고 db가
+    문제→페이지를 아니까, 쪽수는 문제번호로 역추론하는 쪽이 견고하다.
+    """
+    keys = {_qkey(k) for k, v in answers.items()}
+    best, best_n = None, 0
+    for page in db.valid_pages():
+        hit = keys & {_qkey(q.question_no) for q in db.questions_for(page)}
+        if len(hit) > best_n:
+            best, best_n = page, len(hit)
+    return best
+
+
 def _grade_fullpage(color, db, page_hint, label):
     """페이지 전체를 VLM 1콜로 채점 (OCR·블록절단 없음)."""
     if not vlm.available():
         return PageResult(image=label, hold_reason="VLM API 키 없음")
-    page_no, answers = vlm.read_page(color)
-    page_no = page_hint or page_no
-    if not page_no or page_no not in db.valid_pages():
-        # 쪽수를 못 읽으면 문제 목록을 모른다 → 페이지 전체 보류.
-        return PageResult(image=label, page_no=page_no or "",
-                          hold_reason="쪽수 인식 실패")
+    vlm_page, answers = vlm.read_page(color)
     # VLM은 문제번호를 프롬프트 예시("0046")를 따라 0패딩하기도 한다("21"→"0021").
     # db 키 포맷과 안 맞으면 전부 미매칭되므로, 조회 전에 양쪽 번호를 정규화한다.
     answers = {_qkey(k): v for k, v in answers.items()}
+    # 쪽수 우선순위: 수동 힌트 > 문제번호 역추론 > VLM이 말한 쪽수(환각 위험, 최후순위)
+    page_no = page_hint or _infer_page(db, answers) or vlm_page
+    if not page_no or page_no not in db.valid_pages():
+        # 어느 페이지 문제도 못 읽음 → 페이지 전체 보류.
+        return PageResult(image=label, page_no=page_no or "",
+                          hold_reason="쪽수 인식 실패")
     results = []
     for q in db.questions_for(page_no) or []:
         raw = (answers.get(_qkey(q.question_no)) or "").strip()
@@ -227,6 +244,11 @@ def selftest():
     # 문제번호 정규화: VLM이 0패딩("0021")해도 db 키("21")와 매칭돼야 한다.
     assert _qkey("0021") == "21" and _qkey("21") == "21"
     assert _qkey("0") == "0" and _qkey("7-1") == "7-1"
+
+    # 쪽수 역추론: 읽힌 문제번호가 속한 페이지 채택 (VLM 쪽수 환각 무력화)
+    assert _infer_page(db, {"1": "2", "2": "-367"}) == "12"
+    assert _infer_page(db, {"0001": "3"}) == "12"   # 0패딩도 매칭
+    assert _infer_page(db, {"999": "5"}) is None
 
     from flip.answers import _selftest as answers_selftest
     answers_selftest()

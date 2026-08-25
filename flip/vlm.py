@@ -1,7 +1,7 @@
 """VLM API 클라이언트 (provider 중립): 손글씨 수학 답 크롭 → 문자열.
 
 환경변수:
-  FLIP_VLM_PROVIDER  openai | gemini | anthropic (기본 openai)
+  FLIP_VLM_PROVIDER  openai | gemini | anthropic (기본 gemini)
   FLIP_VLM_API_KEY   API 키. 없으면 available()이 False, read_math()는 None.
   FLIP_VLM_MODEL     모델명 (없으면 provider별 기본값)
 
@@ -31,7 +31,7 @@ import requests
 
 log = logging.getLogger("flip.vlm")
 
-TIMEOUT = 20      # 초 (reasoning 모델은 사고 시간이 있어 여유 있게)
+TIMEOUT = 40      # 초. 페이지 콜이 15~20초대 꼬리를 밟는 실측(20s에선 부분 실패)
 MAX_TOKENS = 100  # 답은 한 줄이라 짧게 (reasoning 모델은 아래에서 여유를 더 준다)
 REASONING_MAX_TOKENS = 2000  # reasoning 모델은 사고 토큰이 한도를 먼저 소진하므로 크게
 # OpenAI 이미지 해상도. low는 손글씨·동그라미를 놓쳐 오답을 낸다(측정: 85를 14로 오독).
@@ -80,7 +80,8 @@ DEFAULT_MODELS = {
 
 
 def _provider():
-    return os.environ.get("FLIP_VLM_PROVIDER", "openai").strip().lower()
+    # 기본 gemini — 실사진 A/B에서 gemini-2.5-flash가 박스 손글씨 판독 최상(2026-08-26)
+    return os.environ.get("FLIP_VLM_PROVIDER", "gemini").strip().lower()
 
 
 def _model():
@@ -181,6 +182,16 @@ def _call_openai(b64, key, model, prompt, max_out=REASONING_MAX_TOKENS):
 
 def _call_gemini(b64, key, model, prompt, max_out=REASONING_MAX_TOKENS):
     # maxOutputTokens에 thinking 토큰도 포함되므로(2.5 계열) max_out 여유를 그대로 쓴다.
+    gen = {"maxOutputTokens": max_out}
+    # 사고 제한 (기본 0 = 끔): 6페이지 A/B에서 사고를 꺼도 판독 정확도 동일, 속도는
+    # 평균 14.3s→6.6s(편차 최대 22.6s→7.9s), 사고토큰 비용도 0. 숫자면 thinkingBudget
+    # (2.5 계열), 단어(low|high)면 thinkingLevel(3.x 계열). 빈 값이면 파라미터 생략
+    # (thinkingConfig 미지원 모델용 — 지원 안 하는 모델에 보내면 400 → 보류가 나므로).
+    thinking = os.environ.get("FLIP_VLM_THINKING", "0").strip()
+    if thinking:
+        gen["thinkingConfig"] = ({"thinkingBudget": int(thinking)}
+                                 if thinking.lstrip("-").isdigit()
+                                 else {"thinkingLevel": thinking})
     r = requests.post(
         f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
         params={"key": key},
@@ -188,7 +199,7 @@ def _call_gemini(b64, key, model, prompt, max_out=REASONING_MAX_TOKENS):
             {"text": prompt},
             {"inline_data": {"mime_type": "image/jpeg", "data": b64}},
         ]}],
-            "generationConfig": {"maxOutputTokens": max_out}},
+            "generationConfig": gen},
         timeout=TIMEOUT)
     r.raise_for_status()
     return r.json()["candidates"][0]["content"]["parts"][0]["text"]
