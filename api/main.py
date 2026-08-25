@@ -177,4 +177,9 @@ def grade_endpoint(req: GradeRequest):
     log.info("/grade 완료: name=%r 쪽수=%s O %d/X %d/보류 %d (%.1fs)%s",
              req.name, pr.page_no or "?", c[O], c[X], c[HOLD], time.monotonic() - t0,
              f" — {pr.hold_reason}" if pr.hold_reason else "")
+    if pr.results:
+        # 문제별 판정 한 줄: 번호=판정(학생답|보류사유). 오채점/보류 원인 추적용.
+        log.info("/grade 상세: %s", "  ".join(
+            f"{r.question_no}={r.verdict}({r.student_answer or r.detail or '-'})"
+            for r in pr.results))
     return _to_response(pr, req.workSheetSource, req.name)
