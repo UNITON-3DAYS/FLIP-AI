@@ -6,13 +6,33 @@ Spring이 페이지 사진과 교재 이름을 보내면 문제별 O/X/보류 �
 
 ## 실행
 
+### 로컬 (개발)
+
 ```bash
 uvicorn api.main:app --host 0.0.0.0 --port 8000
 # 대화형 문서: http://localhost:8000/docs   (OpenAPI: /openapi.json)
 ```
 
+### Docker (로컬·서버 공통)
+
+```bash
+cp .env.example .env                 # 값 채우기 (VLM 키 등)
+mkdir -p answers                     # 정답 JSON을 여기 둔다 (저작권 자료라 이미지엔 안 넣음)
+docker compose up --build            # http://localhost:8000
+curl -sf http://localhost:8000/health
+```
+
+- 정답 디렉터리는 `./answers`가 기본값이며 컨테이너의 `/answers`(읽기전용)로 마운트된다.
+  다른 경로면 `FLIP_ANSWER_HOST_DIR`로 지정한다.
+- `.env`가 없어도 컨테이너는 뜬다(키 없으면 채점이 보류로 나올 뿐).
+- 이미지에는 비밀정보(`.env`)·저작권 자료(`db.ssen*.json`, `samples/`, `*.pdf`)가
+  들어가지 않는다(`.dockerignore`).
+- 빠른 기동이 필요하면 `FLIP_WARMUP_OCR=0`으로 OCR 모델 사전 로드를 건너뛴다
+  (첫 요청에서 지연 로드).
+
 필요 환경변수는 `.env.example` 참고. 최소: 정답 소스(`FLIP_ANSWER_BACKEND`)와
-VLM 키(`FLIP_VLM_API_KEY`). 쪽수 인식을 위해 PaddleOCR도 설치돼 있어야 한다.
+VLM 키(`FLIP_VLM_API_KEY`). 쪽수 인식을 위해 PaddleOCR도 설치돼 있어야 한다(도커
+이미지에는 포함).
 
 ## POST /grade
 

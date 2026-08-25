@@ -15,6 +15,7 @@ O/X/보류 채점 결과를 같은 요청의 응답으로 돌려준다.
 import base64
 import binascii
 import logging
+import os
 
 from fastapi import FastAPI, HTTPException
 
@@ -46,9 +47,16 @@ _VERDICT = {O: Verdict.O, X: Verdict.X, HOLD: Verdict.HOLD}
 
 @app.on_event("startup")
 def _warmup():
-    """느린 초기화(OCR 엔진, 정답 소스)를 첫 요청 전에 끝낸다. 실패해도 서버는 뜬다."""
+    """느린 초기화(OCR 엔진, 정답 소스)를 첫 요청 전에 끝낸다. 실패해도 서버는 뜬다.
+
+    OCR 워밍업은 첫 실행 시 PaddleOCR 모델을 내려받아 수십 초 걸릴 수 있다. CI
+    헬스체크나 빠른 기동이 필요할 때는 FLIP_WARMUP_OCR=0으로 건너뛴다(첫 요청에서
+    지연 로드된다).
+    """
     get_source()  # 정답 소스 싱글턴 생성(환경변수 읽기)
-    if ocr.available():
+    if os.environ.get("FLIP_WARMUP_OCR", "1") != "1":
+        log.info("OCR 워밍업 건너뜀 (FLIP_WARMUP_OCR=0) — 첫 요청에서 지연 로드")
+    elif ocr.available():
         try:
             import numpy as np
             ocr.run_ocr(np.full((32, 32), 255, np.uint8))  # 엔진 로드 트리거

@@ -1,0 +1,35 @@
+# 이미지에 넣지 않을 것 — 빌드 컨텍스트에서 제외.
+
+# 가상환경·파이썬 캐시
+.venv/
+__pycache__/
+*.pyc
+
+# 비밀정보
+.env
+
+# 저작권 자료 (교재 자료·실제 정답 DB) — 절대 이미지에 넣지 않는다
+samples/
+*.pdf
+db.ssen*.json
+
+# 개인 사진·추론 결과
+test_images/
+pred_*
+synth_*.png
+
+# 모델 가중치·학습 산출물
+*.pt
+runs/
+data/
+
+# VCS·CI·에디터
+.git/
+.github/
+.gitignore
+
+# 향후 산출물 (파이썬 이미지엔 불필요)
+client-java/
+
+# macOS
+.DS_Store

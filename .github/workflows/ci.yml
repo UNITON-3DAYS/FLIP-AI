@@ -1,0 +1,51 @@
+name: CI
+
+# main-only 모델. PR과 main push에서 검증한다.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    name: selftest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # selftest는 이미지·OCR·API 키가 필요 없게 설계돼 있어 최소 의존만 설치한다.
+      # (paddle/fastapi 같은 무거운 의존은 build job의 도커 빌드가 커버)
+      - name: 최소 의존 설치
+        run: pip install numpy opencv-python-headless pillow sympy requests
+      - name: selftest
+        run: python grade.py --selftest
+
+  build:
+    name: docker image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      # 무거운 의존 레이어를 GH Actions 캐시로 재사용해 재빌드를 빠르게.
+      - name: 이미지 빌드
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: flip-ai:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      # 컨테이너가 뜨고 /health가 200인지 확인. OCR 모델 다운로드로 기동이
+      # 느려지지 않게 워밍업은 끄고(FLIP_WARMUP_OCR=0) 첫 요청 지연 로드에 맡긴다.
+      - name: 컨테이너 헬스체크
+        run: |
+          docker run -d --name flip -p 8000:8000 -e FLIP_WARMUP_OCR=0 flip-ai:ci
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8000/health; then echo; echo "health OK"; ok=1; break; fi
+            sleep 2
+          done
+          docker logs flip
+          docker rm -f flip >/dev/null
+          test "$ok" = "1"
