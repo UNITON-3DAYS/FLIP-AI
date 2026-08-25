@@ -139,9 +139,10 @@ def _extract_responses_text(data):
 def _call_openai(b64, key, model, prompt, max_out=REASONING_MAX_TOKENS):
     """OpenAI Responses API 주경로 (GPT-5 세대 권장 방식).
 
-    reasoning effort는 FLIP_VLM_REASONING 설정 시에만 보낸다 — 크롭 읽기는
-    단순 작업이라 minimal/low가 빠르고 싸다. Responses 미지원 구모델이면
-    Chat Completions로 폴백.
+    reasoning effort 기본 low — 크롭/페이지 읽기는 단순 작업이라 low가 빠르고 싸다.
+    미설정 시 OpenAI 기본(medium)이 적용돼 서버 콜이 12~13초까지 늘었던 실측이 근거.
+    reasoning 미지원 모델이면 FLIP_VLM_REASONING을 빈 값으로 두면 파라미터를 안 보낸다.
+    Responses 미지원 구모델이면 Chat Completions로 폴백.
     """
     headers = {"Authorization": f"Bearer {key}"}
     payload = {
@@ -153,7 +154,7 @@ def _call_openai(b64, key, model, prompt, max_out=REASONING_MAX_TOKENS):
              "image_url": f"data:image/jpeg;base64,{b64}", "detail": DETAIL},
         ]}],
     }
-    effort = os.environ.get("FLIP_VLM_REASONING")
+    effort = os.environ.get("FLIP_VLM_REASONING", "low")
     if effort:
         payload["reasoning"] = {"effort": effort}
     r = requests.post("https://api.openai.com/v1/responses",
