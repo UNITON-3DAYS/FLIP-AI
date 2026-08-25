@@ -7,7 +7,7 @@ Spring 등 소비자는 이 스키마에서 생성된 OpenAPI(`/openapi.json`)�
 """
 from enum import Enum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class WorksheetSource(str, Enum):
@@ -29,6 +29,13 @@ class GradeRequest(BaseModel):
                          description="학습지 출처. 기본 WORKBOOK(문제집).")
     name: str = Field(description="책·시험지 이름. 정답 DB 조회 키 (예: '쎈 2-1').")
     image_base64: str = Field(description="페이지 사진 1장의 base64 (JPEG/PNG 바이트).")
+
+    @field_validator("workSheetSource", mode="before")
+    @classmethod
+    def _accept_any_case(cls, v):
+        # Backend(FlipAiGradingOcrClient)는 "workbook"/"exam" 소문자로 보낸다. enum은
+        # 대문자(WORKBOOK/EXAM)라 그대로면 422 → 검증 전에 대문자로 정규화해 수용한다.
+        return v.upper() if isinstance(v, str) else v
 
 
 class QuestionResultOut(BaseModel):
