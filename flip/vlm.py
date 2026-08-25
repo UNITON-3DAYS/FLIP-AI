@@ -143,7 +143,11 @@ def _call_openai(b64, key, model, prompt, max_out=REASONING_MAX_TOKENS):
     미설정 시 OpenAI 기본(medium)이 적용돼 서버 콜이 12~13초까지 늘었던 실측이 근거.
     reasoning 미지원 모델이면 FLIP_VLM_REASONING을 빈 값으로 두면 파라미터를 안 보낸다.
     Responses 미지원 구모델이면 Chat Completions로 폴백.
+
+    FLIP_VLM_BASE_URL로 OpenAI 호환 엔드포인트(OpenRouter/Together 등)를 갈아끼울 수
+    있다 — Qwen VL 등 타사 모델도 이 경로 그대로 쓴다(Responses 미지원이면 폴백이 흡수).
     """
+    base = os.environ.get("FLIP_VLM_BASE_URL", "https://api.openai.com/v1").rstrip("/")
     headers = {"Authorization": f"Bearer {key}"}
     payload = {
         "model": model,
@@ -157,7 +161,7 @@ def _call_openai(b64, key, model, prompt, max_out=REASONING_MAX_TOKENS):
     effort = os.environ.get("FLIP_VLM_REASONING", "low")
     if effort:
         payload["reasoning"] = {"effort": effort}
-    r = requests.post("https://api.openai.com/v1/responses",
+    r = requests.post(f"{base}/responses",
                       headers=headers, json=payload, timeout=TIMEOUT)
     if r.status_code < 400:
         return _extract_responses_text(r.json())
@@ -169,7 +173,7 @@ def _call_openai(b64, key, model, prompt, max_out=REASONING_MAX_TOKENS):
                   {"type": "image_url",
                    "image_url": {"url": f"data:image/jpeg;base64,{b64}", "detail": DETAIL}},
               ]}]}
-    r = requests.post("https://api.openai.com/v1/chat/completions",
+    r = requests.post(f"{base}/chat/completions",
                       headers=headers, json=legacy, timeout=TIMEOUT)
     r.raise_for_status()
     return r.json()["choices"][0]["message"]["content"]
