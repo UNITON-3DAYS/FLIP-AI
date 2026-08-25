@@ -88,6 +88,7 @@ Spring의 read timeout을 넉넉히(≈60s) 잡을 것.
 ## 소비자 클라이언트 (SDK)
 
 Spring은 이 API의 DTO를 손으로 쓰지 않고 `/openapi.json`에서 타입 있는 Java
-클라이언트를 생성해 쓴다. 생성·배포 방식과 소비 스니펫은 **AKR-20**에서 다룬다.
-핵심 주의: FastAPI는 **OpenAPI 3.1**을 내므로 openapi-generator는 **7.x 이상**을
-써야 한다(6.x는 3.1을 못 먹는다).
+클라이언트를 생성해 쓴다. 좌표는 `com.flip:flip-client:<info.version>`이며, 생성·배포
+방식과 소비 스니펫(레지스트리 인증·`build.gradle`·호출 예시)은
+[sdk-java.md](sdk-java.md)에 있다. 핵심 주의: FastAPI는 **OpenAPI 3.1**을 내므로
+openapi-generator는 **7.x 이상**을 써야 한다(6.x는 3.1을 못 먹는다).

@@ -79,12 +79,12 @@ def _to_response(pr: PageResult, track: Track, name: str) -> GradeResponse:
     )
 
 
-@app.get("/health", response_model=HealthResponse)
+@app.get("/health", response_model=HealthResponse, operation_id="health")
 def health():
     return HealthResponse(ocr=ocr.available(), vlm=vlm.available())
 
 
-@app.post("/grade", response_model=GradeResponse)
+@app.post("/grade", response_model=GradeResponse, operation_id="grade")
 def grade_endpoint(req: GradeRequest):
     """페이지 사진 1장을 동기로 채점. 블로킹 파이프라인이라 FastAPI가 스레드풀에서 돈다."""
     if req.track is not Track.exam:

@@ -9,7 +9,7 @@
     "/health": {
       "get": {
         "summary": "Health",
-        "operationId": "health_health_get",
+        "operationId": "health",
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -28,7 +28,7 @@
       "post": {
         "summary": "Grade Endpoint",
         "description": "페이지 사진 1장을 동기로 채점. 블로킹 파이프라인이라 FastAPI가 스레드풀에서 돈다.",
-        "operationId": "grade_endpoint_grade_post",
+        "operationId": "grade",
         "requestBody": {
           "content": {
             "application/json": {
