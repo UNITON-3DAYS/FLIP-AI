@@ -1,0 +1,8 @@
+# OCR·PDF 준비용 (로컬 blocks 그레이더 전용). prod 서버(fullpage)는 안 쓴다.
+# 설치: pip install -r requirements-ocr.txt
+# paddlepaddle는 무겁고 느려서 서버 이미지엔 넣지 않는다 — Dockerfile은 requirements.txt만 깐다.
+paddlepaddle
+paddleocr
+
+# 문제집 PDF -> 페이지 이미지 렌더링 (샘플 준비용). 서버 런타임 불필요.
+pypdfium2

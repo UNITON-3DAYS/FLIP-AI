@@ -5,12 +5,8 @@ pillow
 sympy
 requests
 
-# OCR (인쇄 구조 분석). 설치가 무겁다 — CPU 버전이면 충분.
-paddlepaddle
-paddleocr
-
-# 문제집 PDF -> 페이지 이미지 렌더링 (샘플 준비용)
-pypdfium2
+# OCR·PDF 준비용(paddle 등)은 requirements-ocr.txt로 분리했다 — 무겁고,
+# 서버는 fullpage 그레이더라 OCR을 안 쓴다. 로컬 blocks 채점 시에만 깐다.
 
 # 채점 서버 (api/). Spring이 base64 사진을 POST /grade로 보내 동기 채점.
 fastapi
