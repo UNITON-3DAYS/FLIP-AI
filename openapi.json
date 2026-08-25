@@ -1,0 +1,284 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "FLIP 채점 서버",
+    "description": "페이지 사진 1장 → 문제별 O/X/보류 채점 결과.",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/health": {
+      "get": {
+        "summary": "Health",
+        "operationId": "health_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/grade": {
+      "post": {
+        "summary": "Grade Endpoint",
+        "description": "페이지 사진 1장을 동기로 채점. 블로킹 파이프라인이라 FastAPI가 스레드풀에서 돈다.",
+        "operationId": "grade_endpoint_grade_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GradeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GradeResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Counts": {
+        "properties": {
+          "O": {
+            "type": "integer",
+            "title": "O",
+            "default": 0
+          },
+          "X": {
+            "type": "integer",
+            "title": "X",
+            "default": 0
+          },
+          "HOLD": {
+            "type": "integer",
+            "title": "Hold",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "title": "Counts"
+      },
+      "GradeRequest": {
+        "properties": {
+          "track": {
+            "$ref": "#/components/schemas/Track",
+            "description": "채점 트랙. 기본 workbook(문제집).",
+            "default": "workbook"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "description": "책·시험지 이름. 정답 DB 조회 키 (예: '쎈 2-1')."
+          },
+          "image_base64": {
+            "type": "string",
+            "title": "Image Base64",
+            "description": "페이지 사진 1장의 base64 (JPEG/PNG 바이트)."
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "image_base64"
+        ],
+        "title": "GradeRequest"
+      },
+      "GradeResponse": {
+        "properties": {
+          "track": {
+            "$ref": "#/components/schemas/Track"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "page_no": {
+            "type": "string",
+            "title": "Page No",
+            "description": "인식된 쪽수 (못 읽으면 빈 문자열).",
+            "default": ""
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/QuestionResultOut"
+            },
+            "type": "array",
+            "title": "Results"
+          },
+          "counts": {
+            "$ref": "#/components/schemas/Counts"
+          },
+          "hold_reason": {
+            "type": "string",
+            "title": "Hold Reason",
+            "description": "페이지 전체 보류 사유 (있으면 results는 전부 보류).",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "track",
+          "name",
+          "counts"
+        ],
+        "title": "GradeResponse"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "HealthResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "default": "ok"
+          },
+          "ocr": {
+            "type": "boolean",
+            "title": "Ocr",
+            "description": "PaddleOCR 사용 가능 여부. false면 쪽수 인식 불가 → 페이지 보류."
+          },
+          "vlm": {
+            "type": "boolean",
+            "title": "Vlm",
+            "description": "VLM API 키 설정 여부. false면 채점 보류."
+          }
+        },
+        "type": "object",
+        "required": [
+          "ocr",
+          "vlm"
+        ],
+        "title": "HealthResponse"
+      },
+      "QuestionResultOut": {
+        "properties": {
+          "question_no": {
+            "type": "string",
+            "title": "Question No",
+            "description": "문제 번호 (예: '1', '7-1')."
+          },
+          "verdict": {
+            "$ref": "#/components/schemas/Verdict"
+          },
+          "student_answer": {
+            "type": "string",
+            "title": "Student Answer",
+            "description": "인식된 학생 답 (없으면 빈 문자열).",
+            "default": ""
+          },
+          "detail": {
+            "type": "string",
+            "title": "Detail",
+            "description": "판정 근거 또는 보류 사유.",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "question_no",
+          "verdict"
+        ],
+        "title": "QuestionResultOut"
+      },
+      "Track": {
+        "type": "string",
+        "enum": [
+          "workbook",
+          "exam"
+        ],
+        "title": "Track",
+        "description": "채점 트랙. 문제집(쎈 등 기성 학습지) vs 자체 시험지."
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      },
+      "Verdict": {
+        "type": "string",
+        "enum": [
+          "O",
+          "X",
+          "HOLD"
+        ],
+        "title": "Verdict",
+        "description": "문제 판정. 내부 한글 값('보류')을 ASCII로 직렬화한 것."
+      }
+    }
+  }
+}

@@ -62,10 +62,26 @@ def normalize_contrast(img):
     return clahe.apply(gray)
 
 
-def preprocess(path):
-    """이미지 경로 -> (보정된 컬러, 보정된 그레이). 파이프라인 1번."""
-    img = load_image(path)
+def decode_image(data):
+    """메모리 바이트(JPEG/PNG 등) -> BGR ndarray. 실패 시 ValueError.
+
+    서버가 base64로 받은 이미지를 임시 파일 없이 곧장 디코드하는 경로.
+    """
+    arr = np.frombuffer(data, np.uint8)
+    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    if img is None:
+        raise ValueError("이미지 디코드 실패 (지원하지 않는 형식이거나 손상)")
+    return img
+
+
+def preprocess_array(img):
+    """BGR ndarray -> (보정된 컬러, 보정된 그레이). preprocess의 공통 본체."""
     quad = find_page_quad(img)
     if quad is not None:
         img = warp_page(img, quad)
     return img, normalize_contrast(img)
+
+
+def preprocess(path):
+    """이미지 경로 -> (보정된 컬러, 보정된 그레이). 파이프라인 1번."""
+    return preprocess_array(load_image(path))
