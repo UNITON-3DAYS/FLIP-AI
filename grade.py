@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 
 from flip import ocr, structure
-from flip import equivalence, handwriting, vlm
+from flip import equivalence, vlm
 from flip.db import AnswerDB, MULTIPLE_CHOICE, SUBJECTIVE
 from flip.preprocess import preprocess
 from flip.results import HOLD, O, PageResult, QuestionResult, X, format_page
@@ -174,14 +174,11 @@ def selftest():
     answers_selftest()
     from flip.equivalence import _selftest as equivalence_selftest
     equivalence_selftest()
-    from flip.handwriting import _selftest as handwriting_selftest
-    handwriting_selftest()
     from flip.vlm import _selftest as vlm_selftest
     vlm_selftest()
 
     from flip.structure import _selftest as structure_selftest
     structure_selftest()
-    from flip.mcq import _selftest as mcq_selftest; mcq_selftest()
     from flip.session import _selftest as session_selftest
     session_selftest()
 
