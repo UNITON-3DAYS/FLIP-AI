@@ -6,8 +6,8 @@ O/X/보류 채점 결과를 같은 요청의 응답으로 돌려준다.
 핵심 계약:
 - 페이지 번호는 받지 않는다. 정답 DB 전체를 로드해 valid_pages를 얻고, 쪽수는
   파이프라인이 식별한다(DB 로드 → 쪽수 식별 → 채점).
-- track=workbook·exam 모두 채점. 둘 다 name으로 정답 DB를 찾아 같은 파이프라인
-  (grade_prepared)을 탄다 — fullpage 판독이 트랙 무관이라 트랙별 분기가 없다.
+- workSheetSource=WORKBOOK·EXAM 모두 채점. 둘 다 name으로 정답 DB를 찾아 같은
+  파이프라인(grade_prepared)을 탄다 — fullpage 판독이 출처 무관이라 분기가 없다.
 - 채점 실패는 500이 아니라 보류로 흡수한다(VLM 키 없음/OCR 미설치/인식 실패).
   없는 교재는 404, 깨진 base64/이미지는 400.
 
@@ -17,6 +17,7 @@ import base64
 import binascii
 import logging
 import os
+import time
 
 from dotenv import load_dotenv
 
@@ -32,14 +33,21 @@ from flip.preprocess import decode_image, preprocess_array
 from flip.results import HOLD, O, PageResult, X
 from api.schemas import (
     Counts, GradeRequest, GradeResponse, HealthResponse,
-    QuestionResultOut, Track, Verdict,
+    QuestionResultOut, Verdict, WorksheetSource,
+)
+
+# uvicorn은 자기 로거만 설정하고 flip.* 로거는 안 띄운다 → 루트에 핸들러를 달아
+# 파이프라인 로그(flip.vlm/ocr/api)가 서버 stdout에 보이게 한다. 레벨은 env로 조절.
+logging.basicConfig(
+    level=os.environ.get("FLIP_LOG_LEVEL", "INFO"),
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
 
 log = logging.getLogger("flip.api")
 
 # OpenAPI info.version. 계약이 바뀌면 올린다 — Java SDK(AKR-20)의 패키지 버전이
 # 여기서 파생되므로, 이 값을 안 올리면 소비자가 변경을 인지하지 못한다.
-API_VERSION = "0.2.0"  # 0.2.0: exam 트랙 채점 개시(구 501 제거)
+API_VERSION = "0.4.0"  # 0.4.0: 요청 필드 workSheetSource로 정정(Backend 와이어 키 정합)
 
 app = FastAPI(
     title="FLIP 채점 서버",
@@ -82,10 +90,10 @@ def _warmup():
         log.warning("PaddleOCR 미설치 — 쪽수 인식 불가, 페이지 보류로 응답")
 
 
-def _to_response(pr: PageResult, track: Track, name: str) -> GradeResponse:
+def _to_response(pr: PageResult, worksheet_source: WorksheetSource, name: str) -> GradeResponse:
     c = pr.counts()
     return GradeResponse(
-        track=track,
+        workSheetSource=worksheet_source,
         name=name,
         page_no=pr.page_no,
         results=[
@@ -110,9 +118,13 @@ def health():
 @app.post("/grade", response_model=GradeResponse)
 def grade_endpoint(req: GradeRequest):
     """페이지 사진 1장을 동기로 채점. 블로킹 파이프라인이라 FastAPI가 스레드풀에서 돈다."""
-    # workbook·exam 모두 같은 경로: 이름으로 정답 DB를 찾아 fullpage VLM 1콜로 채점한다.
-    # (구 blocks 시대엔 exam이 마커+고정좌표 앞단을 요구해 501이었으나, fullpage는
-    # 트랙 무관하게 페이지 전체를 읽으므로 트랙 분기가 필요 없다.)
+    # WORKBOOK·EXAM 모두 같은 경로: 이름으로 정답 DB를 찾아 fullpage VLM 1콜로 채점한다.
+    # (구 blocks 시대엔 EXAM이 마커+고정좌표 앞단을 요구해 501이었으나, fullpage는
+    # 출처 무관하게 페이지 전체를 읽으므로 분기가 필요 없다.)
+
+    t0 = time.monotonic()
+    log.info("/grade 수신: name=%r source=%s 이미지 %dB",
+             req.name, req.workSheetSource, len(req.image_base64))
 
     # 1) base64 → 이미지 바이트 → BGR
     try:
@@ -140,4 +152,8 @@ def grade_endpoint(req: GradeRequest):
         pr = PageResult(image=req.name, page_no="", results=[],
                         hold_reason=f"처리 오류: {e}")
 
-    return _to_response(pr, req.track, req.name)
+    c = pr.counts()
+    log.info("/grade 완료: name=%r 쪽수=%s O %d/X %d/보류 %d (%.1fs)%s",
+             req.name, pr.page_no or "?", c[O], c[X], c[HOLD], time.monotonic() - t0,
+             f" — {pr.hold_reason}" if pr.hold_reason else "")
+    return _to_response(pr, req.workSheetSource, req.name)

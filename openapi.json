@@ -3,7 +3,7 @@
   "info": {
     "title": "FLIP 채점 서버",
     "description": "페이지 사진 1장 → 문제별 O/X/보류 채점 결과.",
-    "version": "0.2.0"
+    "version": "0.4.0"
   },
   "paths": {
     "/health": {
@@ -89,10 +89,10 @@
       },
       "GradeRequest": {
         "properties": {
-          "track": {
-            "$ref": "#/components/schemas/Track",
-            "description": "채점 트랙. 기본 workbook(문제집).",
-            "default": "workbook"
+          "workSheetSource": {
+            "$ref": "#/components/schemas/WorksheetSource",
+            "description": "학습지 출처. 기본 WORKBOOK(문제집).",
+            "default": "WORKBOOK"
           },
           "name": {
             "type": "string",
@@ -114,8 +114,8 @@
       },
       "GradeResponse": {
         "properties": {
-          "track": {
-            "$ref": "#/components/schemas/Track"
+          "workSheetSource": {
+            "$ref": "#/components/schemas/WorksheetSource"
           },
           "name": {
             "type": "string",
@@ -146,7 +146,7 @@
         },
         "type": "object",
         "required": [
-          "track",
+          "workSheetSource",
           "name",
           "counts"
         ],
@@ -220,15 +220,6 @@
         ],
         "title": "QuestionResultOut"
       },
-      "Track": {
-        "type": "string",
-        "enum": [
-          "workbook",
-          "exam"
-        ],
-        "title": "Track",
-        "description": "채점 트랙. 문제집(쎈 등 기성 학습지) vs 자체 시험지."
-      },
       "ValidationError": {
         "properties": {
           "loc": {
@@ -278,6 +269,15 @@
         ],
         "title": "Verdict",
         "description": "문제 판정. 내부 한글 값('보류')을 ASCII로 직렬화한 것."
+      },
+      "WorksheetSource": {
+        "type": "string",
+        "enum": [
+          "WORKBOOK",
+          "EXAM"
+        ],
+        "title": "WorksheetSource",
+        "description": "학습지 출처. 문제집(쎈 등 기성 학습지) vs 자체 시험지."
       }
     }
   }

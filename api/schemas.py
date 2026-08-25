@@ -2,7 +2,7 @@
 
 Spring 등 소비자는 이 스키마에서 생성된 OpenAPI(`/openapi.json`)로 타입 있는
 클라이언트를 뽑는다. 그래서 필드는 codegen 친화적으로 둔다:
-- verdict/track은 Enum → Java 쪽에 enum이 생겨 switch로 받는다.
+- verdict/workSheetSource는 Enum → Java 쪽에 enum이 생겨 switch로 받는다.
 - image_base64는 str(byte[] 아님) → 소비자가 이중 인코딩하지 않는다.
 """
 from enum import Enum
@@ -10,10 +10,10 @@ from enum import Enum
 from pydantic import BaseModel, Field
 
 
-class Track(str, Enum):
-    """채점 트랙. 문제집(쎈 등 기성 학습지) vs 자체 시험지."""
-    workbook = "workbook"
-    exam = "exam"
+class WorksheetSource(str, Enum):
+    """학습지 출처. 문제집(쎈 등 기성 학습지) vs 자체 시험지."""
+    WORKBOOK = "WORKBOOK"
+    EXAM = "EXAM"
 
 
 class Verdict(str, Enum):
@@ -24,8 +24,9 @@ class Verdict(str, Enum):
 
 
 class GradeRequest(BaseModel):
-    track: Track = Field(default=Track.workbook,
-                         description="채점 트랙. 기본 workbook(문제집).")
+    # 필드명은 Backend GradingOcrRequest의 와이어 키(workSheetSource, S 대문자)에 맞춘다.
+    workSheetSource: WorksheetSource = Field(default=WorksheetSource.WORKBOOK,
+                         description="학습지 출처. 기본 WORKBOOK(문제집).")
     name: str = Field(description="책·시험지 이름. 정답 DB 조회 키 (예: '쎈 2-1').")
     image_base64: str = Field(description="페이지 사진 1장의 base64 (JPEG/PNG 바이트).")
 
@@ -44,7 +45,7 @@ class Counts(BaseModel):
 
 
 class GradeResponse(BaseModel):
-    track: Track
+    workSheetSource: WorksheetSource
     name: str
     page_no: str = Field(default="", description="인식된 쪽수 (못 읽으면 빈 문자열).")
     results: list[QuestionResultOut] = Field(default_factory=list)

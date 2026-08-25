@@ -25,7 +25,7 @@ curl -sf http://localhost:8000/health
 - 정답 디렉터리는 `./answers`가 기본값이며 컨테이너의 `/answers`(읽기전용)로 마운트된다.
   다른 경로면 `FLIP_ANSWER_HOST_DIR`로 지정한다.
 - `.env`가 없어도 컨테이너는 뜬다(키 없으면 채점이 보류로 나올 뿐).
-- 이미지에는 비밀정보(`.env`)·저작권 자료(`db.ssen*.json`, `samples/`, `*.pdf`)가
+- 이미지에는 비밀정보(`.env`)·저작권 자료(`db.s/sen*.json`, `samples/`, `*.pdf`)가
   들어가지 않는다(`.dockerignore`).
 - 빠른 기동이 필요하면 `FLIP_WARMUP_OCR=0`으로 OCR 모델 사전 로드를 건너뛴다
   (첫 요청에서 지연 로드).
@@ -39,23 +39,41 @@ VLM 키(`FLIP_VLM_API_KEY`). 쪽수 인식을 위해 PaddleOCR도 설치돼 있�
 페이지 사진 1장을 채점한다. **페이지 번호는 보내지 않는다** — 서버가 교재 정답
 DB를 로드해 OCR로 쪽수를 스스로 식별한다.
 
-### 요청 (application/json)
+### 요청
 
-| 필드 | 타입 | 필수 | 설명 |
-|---|---|---|---|
-| `track` | `"workbook"` \| `"exam"` | 아니오(기본 `workbook`) | 문제집 / 자체 시험지. **둘 다 채점**하며 파이프라인은 동일(응답에 track만 반향). |
-| `name` | string | 예 | 책·시험지 이름. 정답 DB 조회 키 (예: `"쎈 2-1"`). |
-| `image_base64` | string | 예 | 페이지 사진(JPEG/PNG) 바이트의 base64. data URI 접두사(`data:image/...`) 없이 순수 base64만. |
+#### Request Header
+
+| 변수명 | 타입 | 필수여부 | 설명 | 예시 |
+| --- | --- | --- | --- | --- |
+| Content-Type | string | O | 요청 본문 형식 | `application/json` |
+
+#### Path Variable
+
+없음.
+
+#### Query String
+
+없음. (쪽수도 보내지 않는다 — 서버가 OCR로 식별한다.)
+
+#### Request Body (application/json)
+
+| 변수명 | 타입 | 필수여부 | 설명 | 예시 |
+| --- | --- | --- | --- | --- |
+| workSheetSource | string(enum) | X (기본 `WORKBOOK`) | `WORKBOOK`(문제집) \| `EXAM`(자체 시험지). 둘 다 채점, 파이프라인 동일 | `WORKBOOK` |
+| name | string | O | 책·시험지 이름. 정답 DB 조회 키 | `쎈 2-1` |
+| image_base64 | string | O | 페이지 사진(JPEG/PNG) 바이트의 base64. `data:image/...` 접두사 없이 순수 base64만 | `iVBORw0KGgo...` |
 
 ```json
-{ "track": "workbook", "name": "쎈 2-1", "image_base64": "iVBORw0KGgo..." }
+{ "workSheetSource": "WORKBOOK", "name": "쎈 2-1", "image_base64": "iVBORw0KGgo..." }
 ```
 
-### 응답 200 (application/json)
+### 응답
 
-| 필드 | 타입 | 설명 |
+`200 OK` (application/json)
+
+| 변수명 | 타입 | 설명 |
 |---|---|---|
-| `track` | enum | 요청 track 반향. |
+| `workSheetSource` | enum | 요청 workSheetSource 반향. |
 | `name` | string | 요청 name 반향. |
 | `page_no` | string | 인식된 쪽수. 못 읽으면 `""`. |
 | `results` | array | 문제별 결과. `hold_reason`이 있으면 전부 보류. |
@@ -68,7 +86,7 @@ DB를 로드해 OCR로 쪽수를 스스로 식별한다.
 
 ```json
 {
-  "track": "workbook", "name": "쎈 2-1", "page_no": "12",
+  "workSheetSource": "WORKBOOK", "name": "쎈 2-1", "page_no": "12",
   "results": [
     { "question_no": "1", "verdict": "O", "student_answer": "3", "detail": "" },
     { "question_no": "2", "verdict": "X", "student_answer": "-368", "detail": "" },
@@ -97,12 +115,21 @@ Spring의 read timeout을 넉넉히(≈60s) 잡을 것.
 
 ## GET /health
 
+배포 점검용. 요청 파라미터 없음(Request Header / Path Variable / Query String 모두 없음).
+
+### 응답
+
+`200 OK` (application/json)
+
+| 변수명 | 타입 | 설명 |
+|---|---|---|
+| `status` | string | 항상 `"ok"`. |
+| `ocr` | boolean | PaddleOCR 사용 가능 여부. `false`면 쪽수 인식이 안 돼 페이지가 보류로만 나온다. |
+| `vlm` | boolean | VLM API 키 설정 여부. `false`면 채점이 전부 보류다. |
+
 ```json
 { "status": "ok", "ocr": true, "vlm": true }
 ```
-
-`ocr: false`면 쪽수 인식이 안 돼 페이지가 보류로만 나온다. `vlm: false`면 채점이
-전부 보류다. 배포 점검에 쓴다.
 
 ## 소비자 클라이언트 (SDK)
 

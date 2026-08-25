@@ -4,7 +4,11 @@
 - 결과는 OcrBox 리스트로 통일. 이후 모든 구조 분석 단계가 이 리스트를 재사용한다
   (OCR은 페이지당 1회만 실행).
 """
+import logging
+import time
 from dataclasses import dataclass
+
+log = logging.getLogger("flip.ocr")
 
 _engine = None  # PaddleOCR 인스턴스 캐시 (초기화가 느려서 재사용)
 
@@ -53,6 +57,7 @@ def run_ocr(gray_img, lang="korean"):
     if _engine is None:
         # 프로세스마다 도는 원격 모델소스 체크 생략 (수십 초 낭비)
         os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
+        log.info("PaddleOCR 엔진 초기화 중 (최초 1회, 모델 다운로드로 수십 초 소요 가능)")
         _engine = PaddleOCR(
             lang=lang,
             # 앵커(쪽수·문제번호)만 필요하므로 가벼운 mobile det로 충분.
@@ -73,6 +78,7 @@ def run_ocr(gray_img, lang="korean"):
                            interpolation=cv2.INTER_AREA)
     else:
         small = gray_img
+    t0 = time.monotonic()
     result = _engine.predict(small)
     inv = 1.0 / OCR_SCALE  # 축소본 좌표 -> 원본 좌표 복원
     boxes = []
@@ -85,4 +91,5 @@ def run_ocr(gray_img, lang="korean"):
             ys = [p[1] * inv for p in poly]
             boxes.append(OcrBox(text=text, conf=float(score),
                                 x1=min(xs), y1=min(ys), x2=max(xs), y2=max(ys)))
+    log.info("OCR 완료 %.1fs, 박스 %d개 검출", time.monotonic() - t0, len(boxes))
     return boxes

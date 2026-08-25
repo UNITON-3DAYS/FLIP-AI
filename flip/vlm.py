@@ -20,12 +20,16 @@
 import base64
 import concurrent.futures
 import json
+import logging
 import os
 import re
 import threading
+import time
 
 import cv2
 import requests
+
+log = logging.getLogger("flip.vlm")
 
 TIMEOUT = 20      # 초 (reasoning 모델은 사고 시간이 있어 여유 있게)
 MAX_TOKENS = 100  # 답은 한 줄이라 짧게 (reasoning 모델은 아래에서 여유를 더 준다)
@@ -215,18 +219,29 @@ _CALLS = {"openai": _call_openai, "gemini": _call_gemini, "anthropic": _call_ant
 
 
 def _call(b64, prompt=PROMPT, max_out=REASONING_MAX_TOKENS):
-    """1회 호출 → 정리된 응답 문자열. 어떤 실패든 None."""
+    """1회 호출 → 정리된 응답 문자열. 어떤 실패든 None (실패 사유는 로그로 남긴다)."""
     key = os.environ.get("FLIP_VLM_API_KEY")
-    call = _CALLS.get(_provider())
+    provider, model = _provider(), _model()
+    call = _CALLS.get(provider)
     if not key or call is None:
+        log.warning("VLM 호출 스킵(보류): %s",
+                    "API 키 없음" if not key else f"미지원 provider={provider!r}")
         return None
+    t0 = time.monotonic()
     try:
-        text = call(b64, key, _model(), prompt, max_out)
-    except Exception:
-        return None  # 네트워크 오류/타임아웃/응답 형식 불일치 전부 보류로
-    if not text:
+        text = call(b64, key, model, prompt, max_out)
+    except Exception as e:  # 네트워크 오류/타임아웃/응답 형식 불일치 전부 보류로
+        log.warning("VLM %s/%s 호출 실패(보류, %.1fs): %s", provider, model,
+                    time.monotonic() - t0, e)
         return None
-    return text.strip().strip("`").strip()
+    dt = time.monotonic() - t0
+    if not text:
+        log.warning("VLM %s/%s 응답 비어있음(보류, %.1fs)", provider, model, dt)
+        return None
+    text = text.strip().strip("`").strip()
+    log.info("VLM %s/%s ok %.1fs → %r", provider, model, dt,
+             text[:60] + ("…" if len(text) > 60 else ""))
+    return text
 
 
 def read_math(crop):
@@ -249,6 +264,7 @@ def read_math(crop):
     if second is None or second.upper() in REFUSALS:
         return None
     if first.replace(" ", "") != second.replace(" ", ""):
+        log.info("read_math 2회 불일치(보류): %r vs %r", first, second)
         return None  # 2회 불일치 → 인식 불확실
     return first
 
@@ -291,9 +307,11 @@ def read_page(page_img):
     try:
         data = json.loads(re.search(r"\{.*\}", text, re.S).group(0))
     except (AttributeError, ValueError):
+        log.warning("read_page: 응답에서 JSON 파싱 실패(페이지 보류)")
         return None, {}  # JSON 없음/깨짐 → 페이지 보류
     page = data.get("page")
     answers = {str(k): str(v) for k, v in (data.get("answers") or {}).items()}
+    log.info("read_page: 쪽수=%s, 답 %d개 읽음", page or "?", len(answers))
     return (str(page) if page else None), answers
 
 
