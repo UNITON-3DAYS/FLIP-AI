@@ -183,11 +183,12 @@ def _call_openai(b64, key, model, prompt, max_out=REASONING_MAX_TOKENS):
 def _call_gemini(b64, key, model, prompt, max_out=REASONING_MAX_TOKENS):
     # maxOutputTokens에 thinking 토큰도 포함되므로(2.5 계열) max_out 여유를 그대로 쓴다.
     gen = {"maxOutputTokens": max_out}
-    # 사고 제한 (기본 0 = 끔): 6페이지 A/B에서 사고를 꺼도 판독 정확도 동일, 속도는
-    # 평균 14.3s→6.6s(편차 최대 22.6s→7.9s), 사고토큰 비용도 0. 숫자면 thinkingBudget
-    # (2.5 계열), 단어(low|high)면 thinkingLevel(3.x 계열). 빈 값이면 파라미터 생략
-    # (thinkingConfig 미지원 모델용 — 지원 안 하는 모델에 보내면 400 → 보류가 나므로).
-    thinking = os.environ.get("FLIP_VLM_THINKING", "0").strip()
+    # 사고 제한 (기본 빈 값 = 동적 사고). 사고를 끄면(0) 주관식 손글씨는 동일하지만
+    # 객관식 체크 위치를 일관되게 놓치거나('' 보류) 없는 선택지를 환각('6') — 실측으로
+    # 오채점 회귀 확인. 소량 예산(512·1024)도 흔들림이 남고 사고토큰이 붙는 순간 속도
+    # 이득이 사라져, 동적이 유일한 정확 구성. 숫자면 thinkingBudget(2.5 계열),
+    # 단어(low|high)면 thinkingLevel(3.x 계열), 빈 값이면 파라미터 생략(동적).
+    thinking = os.environ.get("FLIP_VLM_THINKING", "").strip()
     if thinking:
         gen["thinkingConfig"] = ({"thinkingBudget": int(thinking)}
                                  if thinking.lstrip("-").isdigit()
