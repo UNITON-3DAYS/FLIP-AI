@@ -121,7 +121,11 @@ def _infer_page(db, answers):
 
 
 def _grade_fullpage(color, db, page_hint, label):
-    """페이지 전체를 VLM 1콜로 채점 (OCR·블록절단 없음)."""
+    """페이지 전체를 VLM 1콜로 채점 (OCR·블록절단 없음).
+
+    bbox 크롭 재판독은 시도 후 폐기(2026-08-26): bbox가 이웃 문제 영역을 잘라와
+    오염이 페이지 판독보다 컸다. 콜별 흔들림은 FLIP_PAGE_VOTES 다수결로 잡는다.
+    """
     if not vlm.available():
         return PageResult(image=label, hold_reason="VLM API 키 없음")
     vlm_page, answers = vlm.read_page(color)

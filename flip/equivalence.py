@@ -28,6 +28,9 @@ def _parse_set(value):
     parts = []
     for item in raw:
         s = str(item)
+        # 쉼표 없이 공백으로만 나열된 해집합("a=90 b=40") → 쉼표 구분으로 정규화.
+        # 아래에서 공백이 전부 제거되면 "a=90b=40"이 되어 파싱이 죽는다(VLM 실측 출력).
+        s = re.sub(r"\s+(?=[a-zA-Z]\w*=)", ",", s)
         for old, new in REPLACEMENTS:
             s = s.replace(old, new)
         # 쉼표로 해 분리 후 원소별 "변수=" 접두 제거 ("x=-2,3" → ["-2", "3"])
