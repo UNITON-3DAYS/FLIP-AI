@@ -1,0 +1,2 @@
+// 산출물 좌표: com.flip:flip-client:<openapi.json info.version>
+rootProject.name = 'flip-client'

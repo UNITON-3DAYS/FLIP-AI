@@ -1,0 +1,78 @@
+// FLIP 채점 서버의 Java 클라이언트 SDK.
+//
+// 진실의 원천은 repo 루트의 openapi.json 하나다. 이 빌드는 그 스펙에서 타입 있는
+// Java 클라이언트를 생성·컴파일해 GitHub Packages(Maven)로 배포한다. Spring 등
+// 소비자는 좌표 한 줄(com.flip:flip-client:<버전>)로 받아 쓴다.
+//
+// 로컬:  gradle build                 (생성 + 컴파일)
+//        gradle publishToMavenLocal   (배포 리허설)
+// CI  :  gradle publish               (.github/workflows/publish-sdk.yml)
+import groovy.json.JsonSlurper
+
+plugins {
+    id 'java-library'
+    id 'maven-publish'
+    // OpenAPI 3.1(FastAPI가 내는 버전)은 generator 7.x 이상에서만 먹는다.
+    id 'org.openapi.generator' version '7.11.0'
+}
+
+group = 'com.flip'
+
+// 버전은 계약(openapi.json info.version)에서 파생한다. 계약이 바뀌면 백엔드가
+// info.version을 올려야 하며, 안 올리면 같은 버전 재배포가 GitHub Packages에서
+// 거부돼 publish가 실패한다(= 버전 누락을 잡아주는 안전장치).
+def specFile = file("$rootDir/../openapi.json")
+version = new JsonSlurper().parse(specFile).info.version
+
+java {
+    toolchain { languageVersion = JavaLanguageVersion.of(17) }
+}
+
+repositories { mavenCentral() }
+
+openApiGenerate {
+    generatorName = 'java'
+    // native = JDK 표준 java.net.http.HttpClient 기반. 런타임 의존이 최소이고
+    // 소비자의 Spring 버전과 충돌하지 않는다(Spring RestClient/WebClient로 바꾸려면
+    // library를 'restclient'/'webclient'로 교체 — 스펙·소비 코드는 동일).
+    library = 'native'
+    inputSpec = specFile.toString()
+    outputDir = "$buildDir/generated"
+    apiPackage = 'com.flip.client.api'
+    modelPackage = 'com.flip.client.model'
+    invokerPackage = 'com.flip.client'
+    configOptions = [
+        useJakartaEe: 'true',            // Spring Boot 3 (jakarta.*)
+        hideGenerationTimestamp: 'true', // 재생성 시 무의미한 diff 방지
+    ]
+}
+
+sourceSets.main.java.srcDir "$buildDir/generated/src/main/java"
+tasks.named('compileJava') { dependsOn tasks.named('openApiGenerate') }
+
+dependencies {
+    api 'com.fasterxml.jackson.core:jackson-databind:2.17.2'
+    api 'com.fasterxml.jackson.datatype:jackson-datatype-jsr310:2.17.2'
+    // nullable 필드(FastAPI ValidationError 등)에 쓰이는 JsonNullable 지원. 이게
+    // 없으면 생성 코드가 JsonNullable/JsonNullableModule을 못 찾아 컴파일 실패.
+    api 'org.openapitools:jackson-databind-nullable:0.2.6'
+    api 'com.google.code.findbugs:jsr305:3.0.2'
+    compileOnly 'jakarta.annotation:jakarta.annotation-api:2.1.1'
+}
+
+publishing {
+    publications {
+        maven(MavenPublication) { from components.java }
+    }
+    repositories {
+        maven {
+            name = 'GitHubPackages'
+            url = 'https://maven.pkg.github.com/UNITON-3DAYS/FLIP-AI'
+            credentials {
+                // CI: Actions 기본 GITHUB_TOKEN(packages:write). 로컬 실배포 시에만 채운다.
+                username = System.getenv('GITHUB_ACTOR')
+                password = System.getenv('GITHUB_TOKEN')
+            }
+        }
+    }
+}

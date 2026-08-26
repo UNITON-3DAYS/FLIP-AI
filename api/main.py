@@ -131,12 +131,12 @@ def _to_response(pr: PageResult, worksheet_source: WorksheetSource, name: str) -
     )
 
 
-@app.get("/health", response_model=HealthResponse)
+@app.get("/health", response_model=HealthResponse, operation_id="health")
 def health():
     return HealthResponse(ocr=ocr.available(), vlm=vlm.available())
 
 
-@app.post("/grade", response_model=GradeResponse)
+@app.post("/grade", response_model=GradeResponse, operation_id="grade")
 def grade_endpoint(req: GradeRequest):
     """페이지 사진 1장을 동기로 채점. 블로킹 파이프라인이라 FastAPI가 스레드풀에서 돈다."""
     # WORKBOOK·EXAM 모두 같은 경로: 이름으로 정답 DB를 찾아 fullpage VLM 1콜로 채점한다.

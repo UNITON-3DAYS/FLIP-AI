@@ -1,0 +1,61 @@
+name: Publish Java SDK
+
+# 계약(openapi.json)이나 클라이언트 빌드가 바뀔 때만 돈다.
+# - PR: 생성 + 컴파일 + 로컬 배포 리허설(publishToMavenLocal)까지만 (실배포 없음)
+# - main push: GitHub Packages(Maven)로 실제 publish
+on:
+  pull_request:
+    paths:
+      - openapi.json
+      - client-java/**
+      - .github/workflows/publish-sdk.yml
+  push:
+    branches: [main]
+    paths:
+      - openapi.json
+      - client-java/**
+      - .github/workflows/publish-sdk.yml
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    name: generate & compile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.10"
+      # openapi.json → Java 클라이언트 생성 → 컴파일 → 로컬 저장소 배포 리허설.
+      - name: 생성·컴파일·배포 리허설
+        working-directory: client-java
+        run: gradle build publishToMavenLocal --no-daemon
+
+  publish:
+    name: publish to GitHub Packages
+    needs: build
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.10"
+      - name: publish
+        working-directory: client-java
+        env:
+          GITHUB_ACTOR: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # info.version이 안 바뀌었으면 같은 버전 재배포가 거부돼 실패한다(의도된 안전장치).
+        run: gradle publish --no-daemon
